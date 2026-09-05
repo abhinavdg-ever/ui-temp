@@ -3,6 +3,8 @@ import {
   ArrowLeft,
   ChevronLeft,
   ChevronRight,
+  Copy,
+  Download,
   FileText,
   ScanSearch,
 } from "lucide-react";
@@ -25,6 +27,30 @@ type OutputMode = "ocr" | "imaging";
 
 const OCR_TABS: OcrKind[] = ["preliminary", "final1", "final2"];
 
+const KIND_FILE_SUFFIX: Record<OcrKind, string> = {
+  preliminary: "prelim",
+  final1: "final1",
+  final2: "final2",
+};
+
+function downloadTextFile(filename: string, text: string) {
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function isUsableOcrText(text: string): boolean {
+  if (!text.trim()) return false;
+  if (text.startsWith("No ")) return false;
+  if (text === "OCR unavailable") return false;
+  if (text.startsWith("No OCR text found")) return false;
+  return true;
+}
+
 export default function FolderViewer({ folderId, onBack }: Props) {
   const [folder, setFolder] = useState<FolderDetail | null>(null);
   const [pageIndex, setPageIndex] = useState(0);
@@ -34,6 +60,7 @@ export default function FolderViewer({ folderId, onBack }: Props) {
   const [loadingFolder, setLoadingFolder] = useState(true);
   const [loadingOcr, setLoadingOcr] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -69,6 +96,7 @@ export default function FolderViewer({ folderId, onBack }: Props) {
     let cancelled = false;
     setLoadingOcr(true);
     setOcrFullText("");
+    setCopied(false);
     getFolderOcr(folder.id, ocrTab)
       .then((data) => {
         if (!cancelled) setOcrFullText(data.text);
@@ -99,7 +127,26 @@ export default function FolderViewer({ folderId, onBack }: Props) {
     return chunk || `No OCR text found for ${page.filename}.`;
   }, [ocrFullText, page]);
 
+  const canUseFull = isUsableOcrText(ocrFullText);
   const pageCount = folder?.pages.length ?? 0;
+  const folderName = folder?.name ?? folderId;
+  const suffix = KIND_FILE_SUFFIX[ocrTab];
+
+  function downloadFullOcr() {
+    if (!canUseFull) return;
+    downloadTextFile(`${folderName}_${suffix}.txt`, ocrFullText);
+  }
+
+  async function copyFullOcr() {
+    if (!canUseFull) return;
+    try {
+      await navigator.clipboard.writeText(ocrFullText);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setCopied(false);
+    }
+  }
 
   return (
     <div className="workspace">
@@ -209,13 +256,15 @@ export default function FolderViewer({ folderId, onBack }: Props) {
           </section>
 
           <section className="pane" aria-label="Output panel">
-            <div className="pane-header">
-              <h2>
-                {outputMode === "ocr" ? "OCR Output" : "Imaging Output"}
-                {page ? (
-                  <span className="ocr-page-label"> · {page.filename}</span>
-                ) : null}
-              </h2>
+            <div className="pane-header pane-header-wrap">
+              <div className="pane-header-main">
+                <h2>
+                  {outputMode === "ocr" ? "OCR Output" : "Imaging Output"}
+                  {page ? (
+                    <span className="ocr-page-label"> · {page.filename}</span>
+                  ) : null}
+                </h2>
+              </div>
               {outputMode === "ocr" && (
                 <div className="output-tabs" role="tablist" aria-label="OCR views">
                   {OCR_TABS.map((kind) => (
@@ -242,6 +291,30 @@ export default function FolderViewer({ folderId, onBack }: Props) {
                 <pre>{pageOcrText || "No OCR text for this page."}</pre>
               )}
             </div>
+            {outputMode === "ocr" && (
+              <div className="ocr-panel-footer">
+                <button
+                  type="button"
+                  className="ocr-footer-btn"
+                  disabled={loadingOcr || !canUseFull}
+                  onClick={() => void copyFullOcr()}
+                  title={`Copy full ${OCR_TAB_LABELS[ocrTab]} text`}
+                >
+                  <Copy size={14} aria-hidden="true" />
+                  {copied ? "Copied" : "Copy"}
+                </button>
+                <button
+                  type="button"
+                  className="ocr-footer-btn primary"
+                  disabled={loadingOcr || !canUseFull}
+                  onClick={downloadFullOcr}
+                  title={`Download full ${OCR_TAB_LABELS[ocrTab]} file`}
+                >
+                  <Download size={14} aria-hidden="true" />
+                  Download
+                </button>
+              </div>
+            )}
           </section>
         </div>
       )}

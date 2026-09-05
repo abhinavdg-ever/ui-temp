@@ -4,8 +4,8 @@ Browse document folders with page images and OCR side-by-side (Preliminary Tess 
 
 ## Features
 
-- **Landing (History)** — folders with Number of pages, OCR Processed, Imaging Processed (`0`), Last Updated At; **OCR** / **Imaging** icon actions (Imaging disabled); 10 per page
-- **Detail** — page viewer (left) + mode icons **OCR** / **Imaging** (Imaging disabled); OCR tabs: **Preliminary (Tess)** / **Final (OSS)** / **Final (AzDocInt)**
+- **Landing (History)** — search, sort (filename / pages / last updated), OCR status (Queued / In Progress / Completed / Failed), OCR/Imaging icons (Imaging disabled), 10 per page with compact page numbers
+- **Detail** — page viewer (left) + mode icons **OCR** / **Imaging** (Imaging disabled); OCR tabs: **Preliminary (Tess)** / **Final (OSS)** / **Final (AzDocInt)**; download page/full OCR
 - **Data modes** via `.env`: `local` (default) or `postgres` (stubbed)
 - **Ad-hoc scripts** — see [`scripts/ADHOC_README.md`](scripts/ADHOC_README.md) to organize images + OCR into `pages/` / `ocr/`
 

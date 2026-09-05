@@ -4,6 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 OcrKind = Literal["preliminary", "final1", "final2"]
+OcrRunStatus = Literal["QUEUED", "IN_PROGRESS", "COMPLETED", "FAILED"]
 
 
 class FolderSummary(BaseModel):
@@ -12,6 +13,7 @@ class FolderSummary(BaseModel):
     page_count: int = 0
     ocr_processed: int = 0
     imaging_processed: int = 0
+    ocr_status: OcrRunStatus = "QUEUED"
     last_updated_at: datetime | None = None
 
 
@@ -30,6 +32,7 @@ class FolderDetail(BaseModel):
     page_count: int
     ocr_processed: int
     imaging_processed: int = 0
+    ocr_status: OcrRunStatus = "QUEUED"
     last_updated_at: datetime | None = None
     pages: list[PageSummary] = Field(default_factory=list)
 

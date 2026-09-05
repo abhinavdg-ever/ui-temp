@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from app.adapters.base import FolderRepository
-from app.core.schemas import FolderDetail, FolderSummary, OcrKind, OcrTextResponse, PageSummary
+from app.core.schemas import FolderDetail, FolderSummary, OcrKind, OcrRunStatus, OcrTextResponse, PageSummary
 
 PAGE_RE = re.compile(r"^page_(\d+)\.(jpe?g|png|webp|tif{1,2})$", re.IGNORECASE)
 PLAIN_NUM_RE = re.compile(r"^(\d+)\.(jpe?g|png|webp|tif{1,2})$", re.IGNORECASE)
@@ -122,12 +122,24 @@ class LocalFolderRepository(FolderRepository):
             return page_count
         return 0
 
+    def _ocr_status(self, folder_dir: Path) -> OcrRunStatus:
+        """Overall run status (OCR + Imaging).
+
+        Intended rule: OCR done + imaging not done → IN_PROGRESS.
+        For now, hardcode IN_PROGRESS for every folder.
+        """
+        _ = folder_dir
+        return "IN_PROGRESS"
+
     def _touch_paths(self, folder_dir: Path, pages: list[tuple[int, Path]]) -> list[Path]:
         paths = [folder_dir, *(p for _, p in pages)]
         for kind in OCR_KINDS:
             ocr = self._ocr_path(folder_dir, kind)
             if ocr.is_file():
                 paths.append(ocr)
+        status_file = folder_dir / "ocr" / "ocr_run_status.txt"
+        if status_file.is_file():
+            paths.append(status_file)
         return paths
 
     def list_folders(self) -> list[FolderSummary]:
@@ -147,6 +159,7 @@ class LocalFolderRepository(FolderRepository):
                     page_count=page_count,
                     ocr_processed=self._ocr_processed_count(entry, page_count),
                     imaging_processed=0,
+                    ocr_status=self._ocr_status(entry),
                     last_updated_at=_latest_mtime(self._touch_paths(entry, pages)),
                 )
             )
@@ -179,6 +192,7 @@ class LocalFolderRepository(FolderRepository):
             page_count=len(pages),
             ocr_processed=self._ocr_processed_count(folder_dir, len(pages)),
             imaging_processed=0,
+            ocr_status=self._ocr_status(folder_dir),
             last_updated_at=_latest_mtime(self._touch_paths(folder_dir, pages)),
             pages=page_summaries,
         )

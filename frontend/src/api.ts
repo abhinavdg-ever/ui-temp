@@ -1,9 +1,12 @@
+export type OcrRunStatus = "QUEUED" | "IN_PROGRESS" | "COMPLETED" | "FAILED";
+
 export type FolderSummary = {
   id: string;
   name: string;
   page_count: number;
   ocr_processed: number;
   imaging_processed: number;
+  ocr_status: OcrRunStatus;
   last_updated_at: string | null;
 };
 
@@ -33,6 +36,13 @@ export const OCR_TAB_LABELS: Record<OcrKind, string> = {
   preliminary: "Preliminary (Tess)",
   final1: "Final (OSS)",
   final2: "Final (AzDocInt)",
+};
+
+export const OCR_STATUS_LABELS: Record<OcrRunStatus, string> = {
+  QUEUED: "Queued",
+  IN_PROGRESS: "In Progress",
+  COMPLETED: "Completed",
+  FAILED: "Failed",
 };
 
 async function api<T>(path: string): Promise<T> {

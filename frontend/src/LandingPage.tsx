@@ -7,14 +7,23 @@ import {
   Inbox,
   RefreshCw,
   ScanSearch,
+  Search,
 } from "lucide-react";
-import { listFolders, type FolderSummary } from "./api";
+import {
+  listFolders,
+  OCR_STATUS_LABELS,
+  type FolderSummary,
+  type OcrRunStatus,
+} from "./api";
 
 const PAGE_SIZE = 10;
 
 type Props = {
   onView: (folderId: string) => void;
 };
+
+type SortKey = "filename" | "pages" | "updated";
+type SortDir = "asc" | "desc";
 
 function fmtUpdated(iso: string | null): string {
   if (!iso) return "—";
@@ -31,11 +40,43 @@ function fmtUpdated(iso: string | null): string {
   }).format(d);
 }
 
+function statusClass(status: OcrRunStatus): string {
+  switch (status) {
+    case "COMPLETED":
+      return "status-pill status-completed";
+    case "IN_PROGRESS":
+      return "status-pill status-progress";
+    case "FAILED":
+      return "status-pill status-failed";
+    default:
+      return "status-pill status-queued";
+  }
+}
+
+function compareFolders(a: FolderSummary, b: FolderSummary, key: SortKey, dir: SortDir): number {
+  const sign = dir === "asc" ? 1 : -1;
+  if (key === "filename") {
+    return a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) * sign;
+  }
+  if (key === "pages") {
+    if (a.page_count !== b.page_count) return (a.page_count - b.page_count) * sign;
+    return a.name.localeCompare(b.name) * sign;
+  }
+  const at = a.last_updated_at ? Date.parse(a.last_updated_at) : 0;
+  const bt = b.last_updated_at ? Date.parse(b.last_updated_at) : 0;
+  if (at !== bt) return (at - bt) * sign;
+  return a.name.localeCompare(b.name) * sign;
+}
+
 export default function LandingPage({ onView }: Props) {
   const [folders, setFolders] = useState<FolderSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+  const [query, setQuery] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("updated");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [statusFilter, setStatusFilter] = useState<"ALL" | OcrRunStatus>("ALL");
 
   async function load() {
     setLoading(true);
@@ -55,13 +96,29 @@ export default function LandingPage({ onView }: Props) {
     void load();
   }, []);
 
-  const totals = useMemo(() => {
-    const pages = folders.reduce((sum, f) => sum + f.page_count, 0);
-    const ocr = folders.reduce((sum, f) => sum + f.ocr_processed, 0);
-    return { folders: folders.length, pages, ocr };
-  }, [folders]);
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    let rows = folders;
+    if (q) {
+      rows = rows.filter((f) => f.name.toLowerCase().includes(q));
+    }
+    if (statusFilter !== "ALL") {
+      rows = rows.filter((f) => f.ocr_status === statusFilter);
+    }
+    return [...rows].sort((a, b) => compareFolders(a, b, sortKey, sortDir));
+  }, [folders, query, sortKey, sortDir, statusFilter]);
 
-  const totalPages = Math.max(1, Math.ceil(folders.length / PAGE_SIZE));
+  const totals = useMemo(() => {
+    const pages = filtered.reduce((sum, f) => sum + f.page_count, 0);
+    const ocr = filtered.reduce((sum, f) => sum + f.ocr_processed, 0);
+    return { folders: filtered.length, pages, ocr };
+  }, [filtered]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+
+  useEffect(() => {
+    setPage(1);
+  }, [query, sortKey, sortDir, statusFilter]);
 
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
@@ -69,18 +126,45 @@ export default function LandingPage({ onView }: Props) {
 
   const pageFolders = useMemo(() => {
     const start = (page - 1) * PAGE_SIZE;
-    return folders.slice(start, start + PAGE_SIZE);
-  }, [folders, page]);
+    return filtered.slice(start, start + PAGE_SIZE);
+  }, [filtered, page]);
 
-  const rangeStart = folders.length === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
-  const rangeEnd = Math.min(page * PAGE_SIZE, folders.length);
+  const rangeStart = filtered.length === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+  const rangeEnd = Math.min(page * PAGE_SIZE, filtered.length);
+
+  const pageNumbers = useMemo(() => {
+    const maxButtons = 7;
+    if (totalPages <= maxButtons) {
+      return Array.from({ length: totalPages }, (_, i) => i + 1);
+    }
+    const pages = new Set<number>([1, totalPages, page]);
+    for (let d = 1; pages.size < maxButtons - 1; d++) {
+      if (page - d >= 1) pages.add(page - d);
+      if (page + d <= totalPages) pages.add(page + d);
+    }
+    return [...pages].sort((a, b) => a - b);
+  }, [page, totalPages]);
+
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir(key === "filename" ? "asc" : "desc");
+    }
+  }
+
+  function sortIndicator(key: SortKey): string {
+    if (sortKey !== key) return "";
+    return sortDir === "asc" ? " ↑" : " ↓";
+  }
 
   return (
     <div className="landing">
       <div className="landing-home">
         <div className="landing-intro">
           <h1>History</h1>
-          <p>Browse processed folders, page counts, and OCR status.</p>
+          <p>Browse processed folders, and view OCR and Imaging Pipeline Results.</p>
         </div>
 
         {folders.length > 0 && (
@@ -106,38 +190,82 @@ export default function LandingPage({ onView }: Props) {
 
         <section className="landing-history" aria-label="History">
           <div className="landing-history-header">
-            <History size={16} aria-hidden="true" />
-            <h2>History</h2>
-            <span className="landing-history-count">{folders.length}</span>
-            <div style={{ marginLeft: "auto" }}>
-              <button
-                type="button"
-                className="landing-icon-btn"
-                onClick={() => void load()}
-                title="Refresh"
-                aria-label="Refresh history"
-                disabled={loading}
-              >
-                <RefreshCw size={15} />
-              </button>
+            <div className="landing-history-title">
+              <History size={16} aria-hidden="true" />
+              <h2>History</h2>
+              <span className="landing-history-count">{filtered.length}</span>
+            </div>
+
+            <div className="landing-toolbar">
+              <label className="landing-search">
+                <Search size={14} aria-hidden="true" />
+                <input
+                  type="search"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search file / folder…"
+                  aria-label="Search folders"
+                />
+              </label>
+
+              <label className="landing-select-wrap">
+                <span>Status</span>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value as "ALL" | OcrRunStatus)}
+                  aria-label="Filter by status"
+                >
+                  <option value="ALL">All</option>
+                  <option value="QUEUED">Queued</option>
+                  <option value="IN_PROGRESS">In Progress</option>
+                  <option value="COMPLETED">Completed</option>
+                  <option value="FAILED">Failed</option>
+                </select>
+              </label>
             </div>
           </div>
+
           <div className="landing-history-scroll">
             <table className="landing-history-table">
               <thead>
                 <tr>
-                  <th>Folder</th>
-                  <th>Number of pages</th>
-                  <th>OCR Processed</th>
-                  <th>Imaging Processed</th>
-                  <th>Last Updated At</th>
+                  <th>
+                    <button
+                      type="button"
+                      className={`th-sort${sortKey === "filename" ? " active" : ""}`}
+                      onClick={() => toggleSort("filename")}
+                    >
+                      Folder{sortIndicator("filename")}
+                    </button>
+                  </th>
+                  <th>
+                    <button
+                      type="button"
+                      className={`th-sort${sortKey === "pages" ? " active" : ""}`}
+                      onClick={() => toggleSort("pages")}
+                    >
+                      Pages{sortIndicator("pages")}
+                    </button>
+                  </th>
+                  <th>OCR</th>
+                  <th>Imaging</th>
+                  <th>Status</th>
+                  <th>
+                    <button
+                      type="button"
+                      className={`th-sort${sortKey === "updated" ? " active" : ""}`}
+                      onClick={() => toggleSort("updated")}
+                    >
+                      Last Updated{sortIndicator("updated")}
+                    </button>
+                  </th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {loading && folders.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="landing-history-empty">
+                    <td colSpan={7} className="landing-history-empty">
                       <div className="landing-empty-state">
                         <div className="landing-empty-icon">
                           <RefreshCw size={18} />
@@ -146,19 +274,18 @@ export default function LandingPage({ onView }: Props) {
                       </div>
                     </td>
                   </tr>
-                ) : folders.length === 0 ? (
+                ) : filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="landing-history-empty">
+                    <td colSpan={7} className="landing-history-empty">
                       <div className="landing-empty-state">
                         <div className="landing-empty-icon">
                           <Inbox size={18} />
                         </div>
-                        <h3>No history found</h3>
+                        <h3>{folders.length === 0 ? "No history found" : "No matching folders"}</h3>
                         <p>
-                          Add folders under <code>DATA_ROOT</code> with{" "}
-                          <code>pages/1.jpg</code> and{" "}
-                          <code>ocr/&lt;folder&gt;_prelim.txt</code> sections marked{" "}
-                          <code>===== 1.jpg =====</code>.
+                          {folders.length === 0
+                            ? "Add folders under DATA_ROOT with pages/ and ocr/ outputs."
+                            : "Try a different search or status filter."}
                         </p>
                       </div>
                     </td>
@@ -172,6 +299,11 @@ export default function LandingPage({ onView }: Props) {
                       <td className="landing-col-num">{folder.page_count}</td>
                       <td className="landing-col-num">{folder.ocr_processed}</td>
                       <td className="landing-col-num">{folder.imaging_processed}</td>
+                      <td>
+                        <span className={statusClass(folder.ocr_status)}>
+                          {OCR_STATUS_LABELS[folder.ocr_status]}
+                        </span>
+                      </td>
                       <td className="landing-col-updated">
                         {fmtUpdated(folder.last_updated_at)}
                       </td>
@@ -206,10 +338,10 @@ export default function LandingPage({ onView }: Props) {
             </table>
           </div>
 
-          {folders.length > 0 && (
+          {filtered.length > 0 && (
             <div className="landing-pagination" aria-label="History pagination">
               <span className="landing-pagination-meta">
-                Showing {rangeStart}–{rangeEnd} of {folders.length}
+                {rangeStart}–{rangeEnd} of {filtered.length}
               </span>
               <div className="landing-pagination-controls">
                 <button
@@ -219,12 +351,26 @@ export default function LandingPage({ onView }: Props) {
                   onClick={() => setPage((p) => Math.max(1, p - 1))}
                   aria-label="Previous page"
                 >
-                  <ChevronLeft size={15} />
-                  Prev
+                  <ChevronLeft size={14} />
                 </button>
-                <span className="landing-pagination-page">
-                  Page {page} of {totalPages}
-                </span>
+                {pageNumbers.map((n, idx) => {
+                  const prev = pageNumbers[idx - 1];
+                  const showEllipsis = prev != null && n - prev > 1;
+                  return (
+                    <span key={n} className="landing-page-num-wrap">
+                      {showEllipsis && <span className="landing-page-ellipsis">…</span>}
+                      <button
+                        type="button"
+                        className={`landing-page-num${n === page ? " active" : ""}`}
+                        onClick={() => setPage(n)}
+                        aria-label={`Page ${n}`}
+                        aria-current={n === page ? "page" : undefined}
+                      >
+                        {n}
+                      </button>
+                    </span>
+                  );
+                })}
                 <button
                   type="button"
                   className="landing-page-btn"
@@ -232,8 +378,7 @@ export default function LandingPage({ onView }: Props) {
                   onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                   aria-label="Next page"
                 >
-                  Next
-                  <ChevronRight size={15} />
+                  <ChevronRight size={14} />
                 </button>
               </div>
             </div>
