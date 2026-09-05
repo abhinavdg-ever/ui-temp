@@ -529,6 +529,75 @@ input {
   flex-shrink: 0;
 }
 
+.mode-icon-group {
+  display: inline-flex;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.mode-icon-btn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+  min-width: 3.4rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--neutral-600);
+  cursor: pointer;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.mode-icon-btn:hover:not(:disabled) {
+  border-color: var(--brand-300);
+  color: var(--brand-700);
+  background: var(--brand-50);
+}
+
+.mode-icon-btn.active {
+  border-color: var(--brand-500);
+  background: var(--brand-100);
+  color: var(--brand-800);
+}
+
+.mode-icon-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.action-icon-btn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.15rem;
+  min-width: 2.6rem;
+  padding: 0.35rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--brand-700);
+  cursor: pointer;
+  font-size: 0.62rem;
+  font-weight: 600;
+}
+
+.action-icon-btn:hover:not(:disabled) {
+  background: var(--brand-50);
+  border-color: var(--brand-300);
+}
+
+.action-icon-btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+  color: var(--neutral-500);
+}
+
 .workspace-header-start {
   display: flex;
   align-items: center;
@@ -710,10 +779,12 @@ input {
 
 .output-tabs {
   display: inline-flex;
+  flex-wrap: wrap;
   gap: 0.25rem;
   padding: 0.2rem;
   border-radius: 9px;
   background: var(--neutral-100);
+  max-width: 100%;
 }
 
 .output-tabs button {

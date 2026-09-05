@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, Eye, History, Inbox, RefreshCw } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  FileText,
+  History,
+  Inbox,
+  RefreshCw,
+  ScanSearch,
+} from "lucide-react";
 import { listFolders, type FolderSummary } from "./api";
 
 const PAGE_SIZE = 10;
@@ -171,13 +179,23 @@ export default function LandingPage({ onView }: Props) {
                         <div className="landing-row-actions">
                           <button
                             type="button"
-                            className="view-btn"
+                            className="action-icon-btn"
                             onClick={() => onView(folder.id)}
-                            title="View folder"
-                            aria-label={`View ${folder.name}`}
+                            title="View OCR"
+                            aria-label={`View OCR for ${folder.name}`}
                           >
-                            <Eye size={14} aria-hidden="true" />
-                            View
+                            <FileText size={16} aria-hidden="true" />
+                            OCR
+                          </button>
+                          <button
+                            type="button"
+                            className="action-icon-btn"
+                            disabled
+                            title="Imaging (coming soon)"
+                            aria-label={`View Imaging for ${folder.name} (disabled)`}
+                          >
+                            <ScanSearch size={16} aria-hidden="true" />
+                            Imaging
                           </button>
                         </div>
                       </td>

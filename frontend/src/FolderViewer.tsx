@@ -1,8 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, ChevronLeft, ChevronRight } from "lucide-react";
+import {
+  ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
+  FileText,
+  ScanSearch,
+} from "lucide-react";
 import {
   getFolder,
   getFolderOcr,
+  OCR_TAB_LABELS,
   pageImageUrl,
   type FolderDetail,
   type OcrKind,
@@ -14,9 +21,14 @@ type Props = {
   onBack: () => void;
 };
 
+type OutputMode = "ocr" | "imaging";
+
+const OCR_TABS: OcrKind[] = ["preliminary", "final1", "final2"];
+
 export default function FolderViewer({ folderId, onBack }: Props) {
   const [folder, setFolder] = useState<FolderDetail | null>(null);
   const [pageIndex, setPageIndex] = useState(0);
+  const [outputMode, setOutputMode] = useState<OutputMode>("ocr");
   const [ocrTab, setOcrTab] = useState<OcrKind>("preliminary");
   const [ocrFullText, setOcrFullText] = useState("");
   const [loadingFolder, setLoadingFolder] = useState(true);
@@ -28,6 +40,7 @@ export default function FolderViewer({ folderId, onBack }: Props) {
     setLoadingFolder(true);
     setError(null);
     setPageIndex(0);
+    setOutputMode("ocr");
     setOcrTab("preliminary");
     getFolder(folderId)
       .then((data) => {
@@ -49,7 +62,7 @@ export default function FolderViewer({ folderId, onBack }: Props) {
   const page = folder?.pages[pageIndex] ?? null;
 
   useEffect(() => {
-    if (!folder) {
+    if (!folder || outputMode !== "ocr") {
       setOcrFullText("");
       return;
     }
@@ -64,7 +77,7 @@ export default function FolderViewer({ folderId, onBack }: Props) {
         if (!cancelled) {
           setOcrFullText(
             err instanceof Error
-              ? `No ${ocrTab} OCR available.\n\n${err.message}`
+              ? `No ${OCR_TAB_LABELS[ocrTab]} available.\n\n${err.message}`
               : "OCR unavailable",
           );
         }
@@ -75,7 +88,7 @@ export default function FolderViewer({ folderId, onBack }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [folder, ocrTab]);
+  }, [folder, ocrTab, outputMode]);
 
   const pageOcrText = useMemo(() => {
     if (!ocrFullText || !page) return "";
@@ -104,6 +117,30 @@ export default function FolderViewer({ folderId, onBack }: Props) {
                 : `${pageCount} page${pageCount === 1 ? "" : "s"} · OCR ${folder?.ocr_processed ?? 0} · Imaging ${folder?.imaging_processed ?? 0}`}
             </p>
           </div>
+        </div>
+
+        <div className="mode-icon-group" role="group" aria-label="Output mode">
+          <button
+            type="button"
+            className={`mode-icon-btn${outputMode === "ocr" ? " active" : ""}`}
+            onClick={() => setOutputMode("ocr")}
+            title="OCR"
+            aria-label="OCR output"
+            aria-pressed={outputMode === "ocr"}
+          >
+            <FileText size={18} aria-hidden="true" />
+            <span>OCR</span>
+          </button>
+          <button
+            type="button"
+            className="mode-icon-btn"
+            disabled
+            title="Imaging (coming soon)"
+            aria-label="Imaging output (disabled)"
+          >
+            <ScanSearch size={18} aria-hidden="true" />
+            <span>Imaging</span>
+          </button>
         </div>
       </div>
 
@@ -171,37 +208,35 @@ export default function FolderViewer({ folderId, onBack }: Props) {
             )}
           </section>
 
-          <section className="pane" aria-label="OCR output">
+          <section className="pane" aria-label="Output panel">
             <div className="pane-header">
               <h2>
-                OCR Output
+                {outputMode === "ocr" ? "OCR Output" : "Imaging Output"}
                 {page ? (
                   <span className="ocr-page-label"> · {page.filename}</span>
                 ) : null}
               </h2>
-              <div className="output-tabs" role="tablist" aria-label="OCR views">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={ocrTab === "preliminary"}
-                  className={ocrTab === "preliminary" ? "active" : ""}
-                  onClick={() => setOcrTab("preliminary")}
-                >
-                  Preliminary OCR
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={ocrTab === "final"}
-                  className={ocrTab === "final" ? "active" : ""}
-                  onClick={() => setOcrTab("final")}
-                >
-                  Final OCR
-                </button>
-              </div>
+              {outputMode === "ocr" && (
+                <div className="output-tabs" role="tablist" aria-label="OCR views">
+                  {OCR_TABS.map((kind) => (
+                    <button
+                      key={kind}
+                      type="button"
+                      role="tab"
+                      aria-selected={ocrTab === kind}
+                      className={ocrTab === kind ? "active" : ""}
+                      onClick={() => setOcrTab(kind)}
+                    >
+                      {OCR_TAB_LABELS[kind]}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="ocr-panel" role="tabpanel">
-              {loadingOcr ? (
+              {outputMode === "imaging" ? (
+                <div className="ocr-empty">Imaging output is not available yet.</div>
+              ) : loadingOcr ? (
                 <div className="ocr-loading">Loading OCR output…</div>
               ) : (
                 <pre>{pageOcrText || "No OCR text for this page."}</pre>

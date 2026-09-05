@@ -1,12 +1,13 @@
 # Advantmed Imaging UI
 
-Browse document folders with page images and Preliminary / Final OCR side-by-side. Visual language matches `advantmed-document-processing`.
+Browse document folders with page images and OCR side-by-side (Preliminary Tess / Final OSS / Final AzDocInt).
 
 ## Features
 
-- **Landing** — History list with Number of pages, OCR Processed, Imaging Processed (hardcoded `0`), Last Updated At, and **View** (10 per page, paginated)
-- **Detail** — page viewer (left) + OCR tabs: **Preliminary OCR** / **Final OCR** (right), synced page-by-page from the single OCR file
+- **Landing (History)** — folders with Number of pages, OCR Processed, Imaging Processed (`0`), Last Updated At; **OCR** / **Imaging** icon actions (Imaging disabled); 10 per page
+- **Detail** — page viewer (left) + mode icons **OCR** / **Imaging** (Imaging disabled); OCR tabs: **Preliminary (Tess)** / **Final (OSS)** / **Final (AzDocInt)**
 - **Data modes** via `.env`: `local` (default) or `postgres` (stubbed)
+- **Ad-hoc scripts** — see [`scripts/ADHOC_README.md`](scripts/ADHOC_README.md) to organize images + OCR into `pages/` / `ocr/`
 
 ## Local folder layout
 
@@ -14,8 +15,9 @@ Browse document folders with page images and Preliminary / Final OCR side-by-sid
 data/folders/<folder_name>/
   pages/1.jpg
   pages/2.jpg
-  ocr/<folder_name>_prelim.txt
-  ocr/<folder_name>_final.txt
+  ocr/<folder_name>_prelim.txt     # Preliminary (Tess)
+  ocr/<folder_name>_final1.txt     # Final (OSS)
+  ocr/<folder_name>_final2.txt     # Final (AzDocInt)
 ```
 
 OCR files are one document each. Pages are split on filename markers that match the image name exactly:
@@ -118,4 +120,4 @@ See root `.env`:
 - `GET /api/folders` — list folders
 - `GET /api/folders/{id}` — folder + pages
 - `GET /api/folders/{id}/pages/{n}/image` — page image
-- `GET /api/folders/{id}/ocr?kind=preliminary|final` — folder OCR text (`*_prelim.txt` / `*_final.txt`)
+- `GET /api/folders/{id}/ocr?kind=preliminary|final1|final2` — folder OCR (`*_prelim.txt` / `*_final1.txt` / `*_final2.txt`)

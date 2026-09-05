@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+OcrKind = Literal["preliminary", "final1", "final2"]
+
 
 class FolderSummary(BaseModel):
     id: str
@@ -18,7 +20,8 @@ class PageSummary(BaseModel):
     filename: str
     image_url: str
     has_preliminary_ocr: bool = False
-    has_final_ocr: bool = False
+    has_final1_ocr: bool = False
+    has_final2_ocr: bool = False
 
 
 class FolderDetail(BaseModel):
@@ -33,7 +36,7 @@ class FolderDetail(BaseModel):
 
 class OcrTextResponse(BaseModel):
     folder_id: str
-    kind: Literal["preliminary", "final"]
+    kind: OcrKind
     text: str
 
 

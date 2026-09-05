@@ -12,19 +12,27 @@ export type PageSummary = {
   filename: string;
   image_url: string;
   has_preliminary_ocr: boolean;
-  has_final_ocr: boolean;
+  has_final1_ocr: boolean;
+  has_final2_ocr: boolean;
 };
 
 export type FolderDetail = FolderSummary & {
   pages: PageSummary[];
 };
 
-export type OcrKind = "preliminary" | "final";
+/** preliminary = Tess (_prelim), final1 = OSS (_final1), final2 = AzDocInt (_final2) */
+export type OcrKind = "preliminary" | "final1" | "final2";
 
 export type OcrTextResponse = {
   folder_id: string;
   kind: OcrKind;
   text: string;
+};
+
+export const OCR_TAB_LABELS: Record<OcrKind, string> = {
+  preliminary: "Preliminary (Tess)",
+  final1: "Final (OSS)",
+  final2: "Final (AzDocInt)",
 };
 
 async function api<T>(path: string): Promise<T> {

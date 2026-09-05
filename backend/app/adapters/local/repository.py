@@ -7,16 +7,20 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from app.adapters.base import FolderRepository
-from app.core.schemas import FolderDetail, FolderSummary, OcrTextResponse, PageSummary
+from app.core.schemas import FolderDetail, FolderSummary, OcrKind, OcrTextResponse, PageSummary
 
 PAGE_RE = re.compile(r"^page_(\d+)\.(jpe?g|png|webp|tif{1,2})$", re.IGNORECASE)
 PLAIN_NUM_RE = re.compile(r"^(\d+)\.(jpe?g|png|webp|tif{1,2})$", re.IGNORECASE)
 IMAGE_RE = re.compile(r"\.(jpe?g|png|webp|tif{1,2})$", re.IGNORECASE)
 
-KIND_TO_SUFFIX = {
+# API kind → filename suffix: <folder>_<suffix>.txt
+KIND_TO_SUFFIX: dict[str, str] = {
     "preliminary": "prelim",
-    "final": "final",
+    "final1": "final1",
+    "final2": "final2",
 }
+
+OCR_KINDS: tuple[str, ...] = ("preliminary", "final1", "final2")
 
 
 def _page_num_from_name(name: str) -> int | None:
@@ -38,13 +42,24 @@ def _latest_mtime(paths: list[Path]) -> datetime | None:
     return max(times) if times else None
 
 
+def _normalize_kind(kind: str) -> OcrKind:
+    if kind not in KIND_TO_SUFFIX:
+        raise HTTPException(
+            status_code=400,
+            detail="kind must be preliminary, final1, or final2",
+        )
+    return kind  # type: ignore[return-value]
+
+
 class LocalFolderRepository(FolderRepository):
     """Reads document folders from a local filesystem tree.
 
     Layout per folder:
       pages/1.jpg …
-      ocr/<folder_name>_prelim.txt   # sections: ===== 1.jpg =====
-      ocr/<folder_name>_final.txt
+      ocr/<folder_name>_prelim.txt    # Preliminary (Tess)
+      ocr/<folder_name>_final1.txt    # Final (OSS)
+      ocr/<folder_name>_final2.txt    # Final (AzDocInt)
+      # sections inside each OCR file: ===== 1.jpg =====
     """
 
     def __init__(self, data_root: Path):
@@ -63,7 +78,10 @@ class LocalFolderRepository(FolderRepository):
     def _ocr_path(self, folder_dir: Path, kind: str) -> Path:
         suffix = KIND_TO_SUFFIX.get(kind)
         if not suffix:
-            raise HTTPException(status_code=400, detail="kind must be preliminary or final")
+            raise HTTPException(
+                status_code=400,
+                detail="kind must be preliminary, final1, or final2",
+            )
         return folder_dir / "ocr" / f"{folder_dir.name}_{suffix}.txt"
 
     def _has_ocr(self, folder_dir: Path, kind: str) -> bool:
@@ -90,7 +108,6 @@ class LocalFolderRepository(FolderRepository):
             else:
                 other.append(entry)
         numbered.sort(key=lambda x: x[0])
-        # Unnumbered images follow, sorted by name, after the highest number
         next_num = (numbered[-1][0] + 1) if numbered else 1
         other.sort(key=lambda p: p.name.lower())
         for path in other:
@@ -99,16 +116,15 @@ class LocalFolderRepository(FolderRepository):
         return numbered
 
     def _ocr_processed_count(self, folder_dir: Path, page_count: int) -> int:
-        """If a folder-level OCR file exists, treat all pages as OCR-processed."""
         if page_count == 0:
             return 0
-        if self._has_ocr(folder_dir, "preliminary") or self._has_ocr(folder_dir, "final"):
+        if any(self._has_ocr(folder_dir, kind) for kind in OCR_KINDS):
             return page_count
         return 0
 
     def _touch_paths(self, folder_dir: Path, pages: list[tuple[int, Path]]) -> list[Path]:
         paths = [folder_dir, *(p for _, p in pages)]
-        for kind in ("preliminary", "final"):
+        for kind in OCR_KINDS:
             ocr = self._ocr_path(folder_dir, kind)
             if ocr.is_file():
                 paths.append(ocr)
@@ -144,14 +160,16 @@ class LocalFolderRepository(FolderRepository):
         folder_dir = self._folder_dir(folder_id)
         pages = self._page_files(folder_dir)
         has_prelim = self._has_ocr(folder_dir, "preliminary")
-        has_final = self._has_ocr(folder_dir, "final")
+        has_final1 = self._has_ocr(folder_dir, "final1")
+        has_final2 = self._has_ocr(folder_dir, "final2")
         page_summaries = [
             PageSummary(
                 page_number=num,
                 filename=path.name,
                 image_url=f"/api/folders/{folder_id}/pages/{num}/image",
                 has_preliminary_ocr=has_prelim,
-                has_final_ocr=has_final,
+                has_final1_ocr=has_final1,
+                has_final2_ocr=has_final2,
             )
             for num, path in pages
         ]
@@ -173,18 +191,13 @@ class LocalFolderRepository(FolderRepository):
         raise HTTPException(status_code=404, detail=f"Page {page_number} not found in {folder_id}")
 
     def get_ocr_text(self, folder_id: str, kind: str) -> OcrTextResponse:
+        normalized = _normalize_kind(kind)
         folder_dir = self._folder_dir(folder_id)
-        path = self._ocr_path(folder_dir, kind)
+        path = self._ocr_path(folder_dir, normalized)
         if not path.is_file():
             raise HTTPException(
                 status_code=404,
-                detail=f"No {kind} OCR file ({path.name}) in {folder_id}",
+                detail=f"No {normalized} OCR file ({path.name}) in {folder_id}",
             )
         text = path.read_text(encoding="utf-8", errors="replace")
-        return OcrTextResponse(
-            folder_id=folder_id,
-            kind="preliminary" if kind == "preliminary" else "final",
-            text=text,
-        )
-
-
+        return OcrTextResponse(folder_id=folder_id, kind=normalized, text=text)
