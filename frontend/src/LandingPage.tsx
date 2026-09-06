@@ -3,7 +3,6 @@ import {
   ChevronLeft,
   ChevronRight,
   FileText,
-  History,
   Inbox,
   RefreshCw,
   ScanSearch,
@@ -191,7 +190,6 @@ export default function LandingPage({ onView }: Props) {
         <section className="landing-history" aria-label="History">
           <div className="landing-history-header">
             <div className="landing-history-title">
-              <History size={16} aria-hidden="true" />
               <h2>History</h2>
               <span className="landing-history-count">{filtered.length}</span>
             </div>
@@ -222,6 +220,17 @@ export default function LandingPage({ onView }: Props) {
                   <option value="FAILED">Failed</option>
                 </select>
               </label>
+
+              <button
+                type="button"
+                className="landing-icon-btn"
+                onClick={() => void load()}
+                title="Refresh"
+                aria-label="Refresh history"
+                disabled={loading}
+              >
+                <RefreshCw size={15} />
+              </button>
             </div>
           </div>
 

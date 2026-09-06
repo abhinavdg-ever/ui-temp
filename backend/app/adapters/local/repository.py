@@ -92,16 +92,34 @@ class LocalFolderRepository(FolderRepository):
             return False
 
     def _page_files(self, folder_dir: Path) -> list[tuple[int, Path]]:
+        """Collect page images from pages/ (preferred) or folder root as fallback.
+
+        Folders that have images but no OCR yet often keep files at the folder root
+        until organize_pages.py moves them into pages/.
+        """
+        candidates: list[Path] = []
         pages_dir = folder_dir / "pages"
-        if not pages_dir.is_dir():
-            return []
+        if pages_dir.is_dir():
+            candidates.extend(
+                entry
+                for entry in pages_dir.iterdir()
+                if entry.is_file() and not entry.name.startswith("._") and IMAGE_RE.search(entry.name)
+            )
+
+        # Fallback: images sitting directly in the document folder
+        if not candidates:
+            skip_names = {"ocr", "pages"}
+            for entry in folder_dir.iterdir():
+                if not entry.is_file() or entry.name.startswith("._"):
+                    continue
+                if entry.name.lower() in skip_names:
+                    continue
+                if IMAGE_RE.search(entry.name):
+                    candidates.append(entry)
+
         numbered: list[tuple[int, Path]] = []
         other: list[Path] = []
-        for entry in pages_dir.iterdir():
-            if not entry.is_file() or entry.name.startswith("._"):
-                continue
-            if not IMAGE_RE.search(entry.name):
-                continue
+        for entry in candidates:
             num = _page_num_from_name(entry.name)
             if num is not None:
                 numbered.append((num, entry))
@@ -116,6 +134,7 @@ class LocalFolderRepository(FolderRepository):
         return numbered
 
     def _ocr_processed_count(self, folder_dir: Path, page_count: int) -> int:
+        """Count pages as OCR-processed only when at least one OCR artifact exists."""
         if page_count == 0:
             return 0
         if any(self._has_ocr(folder_dir, kind) for kind in OCR_KINDS):
