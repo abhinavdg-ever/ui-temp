@@ -52,7 +52,7 @@ export default function App() {
           </button>
           <div>
             <strong>Advantmed - Document Processing AI</strong>
-            <p>End to End Imaging Pipeline</p>
+            <p>End to End Imaging Pipeline Results</p>
           </div>
         </div>
         <div className="topbar-meta">
