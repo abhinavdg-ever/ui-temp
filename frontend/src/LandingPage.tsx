@@ -15,7 +15,7 @@ import {
   type OcrRunStatus,
 } from "./api";
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 15;
 
 type Props = {
   onView: (folderId: string) => void;

@@ -5,7 +5,7 @@ Browse document folders with page images and OCR side-by-side (Preliminary Tess 
 ## Features
 
 - **Login** — username/password gate before History (`imaging-user` / `aipocpw2026`)
-- **Landing (History)** — search, sort (filename / pages / last updated), OCR status (Queued / In Progress / Completed / Failed), OCR/Imaging icons (Imaging disabled), 10 per page with compact page numbers
+- **Landing (History)** — search, sort (filename / pages / last updated), OCR status (Queued / In Progress / Completed / Failed), OCR/Imaging icons (Imaging disabled), 15 per page with compact page numbers
 - **Detail** — page viewer (left) + mode icons **OCR** / **Imaging** (Imaging disabled); OCR tabs: **Preliminary (Tess)** / **Final (OSS)** / **Final (AzDocInt)**; download page/full OCR
 - **Data modes** via `.env`: `local` (default) or `postgres` (stubbed)
 - **Ad-hoc scripts** — see [`ad-hoc-scripts/ADHOC_README.md`](ad-hoc-scripts/ADHOC_README.md) to organize images + OCR into `pages/` / `ocr/`
