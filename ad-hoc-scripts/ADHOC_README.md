@@ -1,6 +1,6 @@
 # Ad-hoc organize scripts
 
-Two small scripts that prepare document folders for the Imaging UI.
+Small scripts that prepare or inspect document folders for the Imaging UI.
 
 They assume:
 
@@ -42,6 +42,17 @@ AzDocInt `_final2.json` looks like:
 ```
 
 The UI extracts `pages[].content` (or `lines[].content` if needed).
+
+## 0) Count pages per folder
+
+```bash
+python ad-hoc-scripts/count_pages.py /path/to/images
+# or
+python ad-hoc-scripts/count_pages.py --images-root /path/to/images
+```
+
+Prints each subfolder’s page count (uses `pages/` when present, otherwise images in the folder) and a TOTAL.
+
 ## 1) Organize page images → `pages/`
 
 ```bash
