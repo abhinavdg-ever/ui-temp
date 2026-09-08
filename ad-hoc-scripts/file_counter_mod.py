@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 """
-Basic helper: given a root folder, print how many page images are in each subfolder.
+Basic helper: given a root folder, count page images in each subfolder and write a CSV.
 
 Counts images inside <folder>/pages/ when that dir exists; otherwise counts images
 directly in the subfolder.
 
 Usage:
-  python count_pages.py /path/to/images
-  python count_pages.py --images-root /path/to/images
+  python file_counter_mod.py /path/to/images
+  python file_counter_mod.py /path/to/images --out counts.csv
+  python file_counter_mod.py --images-root /path/to/images
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import re
 import sys
 from pathlib import Path
@@ -41,7 +43,7 @@ def pages_in_folder(folder: Path) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Print number of page images in each subfolder."
+        description="Count page images per subfolder and write a CSV."
     )
     parser.add_argument(
         "root",
@@ -53,6 +55,13 @@ def main() -> int:
         "--images-root",
         default=None,
         help="Same as positional root (optional alias)",
+    )
+    parser.add_argument(
+        "--out",
+        "-o",
+        default=None,
+        metavar="PATH",
+        help="CSV output path (default: <images-root>/file_counts.csv)",
     )
     args = parser.parse_args()
 
@@ -72,17 +81,20 @@ def main() -> int:
             continue
         rows.append((entry.name, pages_in_folder(entry)))
 
-    if not rows:
-        print("No subfolders found.")
-        return 0
+    out = Path(args.out).expanduser().resolve() if args.out else (root / "file_counts.csv")
+    out.parent.mkdir(parents=True, exist_ok=True)
 
-    width = max(len(name) for name, _ in rows)
-    total = 0
-    for name, count in rows:
-        print(f"{name.ljust(width)}  {count}")
-        total += count
-    print(f"{'-' * width}  -----")
-    print(f"{'TOTAL'.ljust(width)}  {total}  ({len(rows)} folders)")
+    total = sum(count for _, count in rows)
+    with out.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["folder", "page_count"])
+        writer.writerows(rows)
+        writer.writerow(["TOTAL", total])
+
+    # Also print a short summary to the terminal
+    print(f"folders: {len(rows)}")
+    print(f"total pages: {total}")
+    print(f"wrote: {out}")
     return 0
 
 

@@ -43,15 +43,15 @@ AzDocInt `_final2.json` looks like:
 
 The UI extracts `pages[].content` (or `lines[].content` if needed).
 
-## 0) Count pages per folder
+## 0) Count pages per folder → CSV
 
 ```bash
-python ad-hoc-scripts/count_pages.py /path/to/images
-# or
-python ad-hoc-scripts/count_pages.py --images-root /path/to/images
+python ad-hoc-scripts/file_counter_mod.py /path/to/images
+# or choose the output path
+python ad-hoc-scripts/file_counter_mod.py /path/to/images --out counts.csv
 ```
 
-Prints each subfolder’s page count (uses `pages/` when present, otherwise images in the folder) and a TOTAL.
+Writes a CSV with columns `folder,page_count` (plus a `TOTAL` row). Default output: `<images-root>/file_counts.csv`. Counts `pages/` when present, otherwise images in the folder.
 
 ## 1) Organize page images → `pages/`
 
