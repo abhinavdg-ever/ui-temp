@@ -41,7 +41,7 @@ export const OCR_TAB_LABELS: Record<OcrKind, string> = {
 export const OCR_STATUS_LABELS: Record<OcrRunStatus, string> = {
   QUEUED: "Queued",
   IN_PROGRESS: "In Progress",
-  COMPLETED: "Completed",
+  COMPLETED: "OCR Completed",
   FAILED: "Failed",
 };
 

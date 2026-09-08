@@ -216,7 +216,7 @@ export default function LandingPage({ onView }: Props) {
                   <option value="ALL">All</option>
                   <option value="QUEUED">Queued</option>
                   <option value="IN_PROGRESS">In Progress</option>
-                  <option value="COMPLETED">Completed</option>
+                  <option value="COMPLETED">OCR Completed</option>
                   <option value="FAILED">Failed</option>
                 </select>
               </label>

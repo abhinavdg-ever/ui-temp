@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from fastapi import HTTPException
 
@@ -13,7 +15,7 @@ PAGE_RE = re.compile(r"^page_(\d+)\.(jpe?g|png|webp|tif{1,2})$", re.IGNORECASE)
 PLAIN_NUM_RE = re.compile(r"^(\d+)\.(jpe?g|png|webp|tif{1,2})$", re.IGNORECASE)
 IMAGE_RE = re.compile(r"\.(jpe?g|png|webp|tif{1,2})$", re.IGNORECASE)
 
-# API kind → filename suffix: <folder>_<suffix>.txt
+# API kind → filename suffix: <folder>_<suffix>.{txt|json}
 KIND_TO_SUFFIX: dict[str, str] = {
     "preliminary": "prelim",
     "final1": "final1",
@@ -21,6 +23,12 @@ KIND_TO_SUFFIX: dict[str, str] = {
 }
 
 OCR_KINDS: tuple[str, ...] = ("preliminary", "final1", "final2")
+# final2 (AzDocInt) is JSON; others are plain text
+KIND_EXTENSIONS: dict[str, tuple[str, ...]] = {
+    "preliminary": (".txt",),
+    "final1": (".txt",),
+    "final2": (".json", ".txt"),
+}
 
 
 def _page_num_from_name(name: str) -> int | None:
@@ -51,6 +59,55 @@ def _normalize_kind(kind: str) -> OcrKind:
     return kind  # type: ignore[return-value]
 
 
+def _page_content_from_azdoc(page: dict[str, Any]) -> str:
+    content = page.get("content")
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+    lines = page.get("lines")
+    if isinstance(lines, list):
+        parts = [
+            str(line.get("content", "")).strip()
+            for line in lines
+            if isinstance(line, dict) and line.get("content")
+        ]
+        if parts:
+            return "\n".join(parts)
+    return ""
+
+
+def azdoc_json_to_ocr_text(data: Any) -> str:
+    """Convert AzDocInt JSON into marker-separated OCR text for the UI.
+
+    Expected shape (per document):
+      { "pages": [ { "fileName": "1.jpg", "content": "...", "lines": [...] }, ... ] }
+    """
+    if isinstance(data, list):
+        pages = data
+    elif isinstance(data, dict):
+        pages = data.get("pages") or []
+    else:
+        return ""
+
+    if not isinstance(pages, list):
+        return ""
+
+    chunks: list[str] = []
+    for idx, page in enumerate(pages, start=1):
+        if not isinstance(page, dict):
+            continue
+        filename = (
+            page.get("fileName")
+            or page.get("filename")
+            or page.get("file_name")
+            or f"{page.get('pageNumber') or idx}.jpg"
+        )
+        body = _page_content_from_azdoc(page)
+        chunks.append(f"===== {filename} =====\n{body}".rstrip())
+    if not chunks:
+        return ""
+    return "\n\n".join(chunks) + "\n"
+
+
 class LocalFolderRepository(FolderRepository):
     """Reads document folders from a local filesystem tree.
 
@@ -58,8 +115,8 @@ class LocalFolderRepository(FolderRepository):
       pages/1.jpg …
       ocr/<folder_name>_prelim.txt    # Preliminary (Tess)
       ocr/<folder_name>_final1.txt    # Final (OSS)
-      ocr/<folder_name>_final2.txt    # Final (AzDocInt)
-      # sections inside each OCR file: ===== 1.jpg =====
+      ocr/<folder_name>_final2.json   # Final (AzDocInt) — JSON with pages[].content
+      # text OCR sections: ===== 1.jpg =====
     """
 
     def __init__(self, data_root: Path):
@@ -82,7 +139,13 @@ class LocalFolderRepository(FolderRepository):
                 status_code=400,
                 detail="kind must be preliminary, final1, or final2",
             )
-        return folder_dir / "ocr" / f"{folder_dir.name}_{suffix}.txt"
+        ocr_dir = folder_dir / "ocr"
+        for ext in KIND_EXTENSIONS.get(kind, (".txt",)):
+            path = ocr_dir / f"{folder_dir.name}_{suffix}{ext}"
+            if path.is_file():
+                return path
+        preferred_ext = KIND_EXTENSIONS.get(kind, (".txt",))[0]
+        return ocr_dir / f"{folder_dir.name}_{suffix}{preferred_ext}"
 
     def _has_ocr(self, folder_dir: Path, kind: str) -> bool:
         path = self._ocr_path(folder_dir, kind)
@@ -106,7 +169,6 @@ class LocalFolderRepository(FolderRepository):
                 if entry.is_file() and not entry.name.startswith("._") and IMAGE_RE.search(entry.name)
             )
 
-        # Fallback: images sitting directly in the document folder
         if not candidates:
             skip_names = {"ocr", "pages"}
             for entry in folder_dir.iterdir():
@@ -142,13 +204,17 @@ class LocalFolderRepository(FolderRepository):
         return 0
 
     def _ocr_status(self, folder_dir: Path) -> OcrRunStatus:
-        """Overall run status (OCR + Imaging).
+        """Derive status from available OCR artifacts.
 
-        Intended rule: OCR done + imaging not done → IN_PROGRESS.
-        For now, hardcode IN_PROGRESS for every folder.
+        All three outputs (prelim, final1, final2) → COMPLETED ("OCR Completed").
+        Any partial OCR → IN_PROGRESS; none → QUEUED.
         """
-        _ = folder_dir
-        return "IN_PROGRESS"
+        present = sum(1 for kind in OCR_KINDS if self._has_ocr(folder_dir, kind))
+        if present == len(OCR_KINDS):
+            return "COMPLETED"
+        if present > 0:
+            return "IN_PROGRESS"
+        return "QUEUED"
 
     def _touch_paths(self, folder_dir: Path, pages: list[tuple[int, Path]]) -> list[Path]:
         paths = [folder_dir, *(p for _, p in pages)]
@@ -228,9 +294,23 @@ class LocalFolderRepository(FolderRepository):
         folder_dir = self._folder_dir(folder_id)
         path = self._ocr_path(folder_dir, normalized)
         if not path.is_file():
+            expected = f"{folder_dir.name}_{KIND_TO_SUFFIX[normalized]}"
             raise HTTPException(
                 status_code=404,
-                detail=f"No {normalized} OCR file ({path.name}) in {folder_id}",
+                detail=f"No {normalized} OCR file ({expected}.json/.txt) in {folder_id}",
             )
-        text = path.read_text(encoding="utf-8", errors="replace")
+
+        raw = path.read_text(encoding="utf-8", errors="replace")
+        if path.suffix.lower() == ".json":
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Invalid AzDocInt JSON in {path.name}: {exc}",
+                ) from exc
+            text = azdoc_json_to_ocr_text(data)
+        else:
+            text = raw
+
         return OcrTextResponse(folder_id=folder_id, kind=normalized, text=text)

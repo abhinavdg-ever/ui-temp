@@ -4,9 +4,9 @@ Copy OCR output files into ocr/ under each matching document folder in the image
 
 You can pass separate roots for each OCR kind:
 
-  --prelim   Preliminary (Tess)
-  --final1   Final (OSS)
-  --final2   Final (AzDocInt)
+  --prelim   Preliminary (Tess)      → <folder>_prelim.txt
+  --final1   Final (OSS)             → <folder>_final1.txt
+  --final2   Final (AzDocInt)        → <folder>_final2.json  (.json preferred; .txt ok)
 
 Or a single combined --ocr-root (legacy) where each document folder holds all kinds.
 
@@ -17,16 +17,17 @@ Expected layouts (any combination of --prelim / --final1 / --final2):
 
   <prelim_root>/<folder_name>/*.txt
   <final1_root>/<folder_name>/*.txt
-  <final2_root>/<folder_name>/*.txt
+  <final2_root>/<folder_name>/*.json   # or *.txt
 
-  # also accepted: a single .txt sitting directly as
+  # also accepted: a single file sitting directly as
   # <prelim_root>/<folder_name>.txt
+  # <final2_root>/<folder_name>.json
 
 Result:
   <images_root>/<folder_name>/ocr/
     <folder_name>_prelim.txt
     <folder_name>_final1.txt
-    <folder_name>_final2.txt
+    <folder_name>_final2.json
 
 Usage:
   python organize_ocr.py \\
@@ -47,6 +48,20 @@ from pathlib import Path
 
 KIND_SUFFIXES = ("prelim", "final1", "final2")
 
+# Preferred destination extension per kind
+KIND_DEST_EXT: dict[str, str] = {
+    "prelim": ".txt",
+    "final1": ".txt",
+    "final2": ".json",
+}
+
+# Source extensions accepted per kind (ordered by preference)
+KIND_SOURCE_EXTS: dict[str, tuple[str, ...]] = {
+    "prelim": (".txt",),
+    "final1": (".txt",),
+    "final2": (".json", ".txt"),
+}
+
 # Used only for --ocr-root (combined) classification
 KIND_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("prelim", re.compile(r"(^|[_\-.])prelim(inary)?([_\-.]|$)", re.I)),
@@ -56,86 +71,101 @@ KIND_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 
 
 def has_kind_suffix(name: str, kind: str) -> bool:
-    return name.lower().endswith(f"_{kind}.txt")
+    lower = name.lower()
+    for ext in KIND_SOURCE_EXTS.get(kind, (".txt",)):
+        if lower.endswith(f"_{kind}{ext}"):
+            return True
+    return False
 
 
 def classify_ocr_file(path: Path) -> str | None:
     lower = path.name.lower()
-    for suffix in ("_prelim.txt", "_final1.txt", "_final2.txt"):
-        if lower.endswith(suffix):
-            return suffix[1:-4]
+    for kind in KIND_SUFFIXES:
+        for ext in KIND_SOURCE_EXTS.get(kind, (".txt",)):
+            if lower.endswith(f"_{kind}{ext}"):
+                return kind
     for suffix, pattern in KIND_PATTERNS:
         if pattern.search(path.stem):
             return suffix
     return None
 
 
-def iter_txt_files(folder: Path) -> list[Path]:
+def iter_ocr_files(folder: Path, kind: str) -> list[Path]:
+    exts = {e.lower() for e in KIND_SOURCE_EXTS.get(kind, (".txt",))}
     files: list[Path] = []
     for entry in folder.rglob("*"):
         if not entry.is_file() or entry.name.startswith("._"):
             continue
-        if entry.suffix.lower() == ".txt":
+        if entry.suffix.lower() in exts:
             files.append(entry)
     return files
 
 
-def pick_source_txt(folder_or_file: Path, kind: str) -> Path | None:
-    """Pick the best OCR .txt for a known kind from a folder or a single file."""
+def pick_source_file(folder_or_file: Path, kind: str) -> Path | None:
+    """Pick the best OCR source file for a known kind from a folder or a single file."""
+    allowed = {e.lower() for e in KIND_SOURCE_EXTS.get(kind, (".txt",))}
     if folder_or_file.is_file():
-        return folder_or_file if folder_or_file.suffix.lower() == ".txt" else None
+        return folder_or_file if folder_or_file.suffix.lower() in allowed else None
 
     if not folder_or_file.is_dir():
         return None
 
-    txts = iter_txt_files(folder_or_file)
-    if not txts:
+    files = iter_ocr_files(folder_or_file, kind)
+    if not files:
         return None
 
     # Prefer already-suffixed names
-    for path in txts:
+    for path in files:
         if has_kind_suffix(path.name, kind):
             return path
 
     # Prefer names that classify as this kind
-    for path in txts:
+    for path in files:
         if classify_ocr_file(path) == kind:
             return path
 
-    # Fallback: single txt in the folder (common when kind root already separates kinds)
-    if len(txts) == 1:
-        return txts[0]
+    # Prefer extension order (e.g. .json before .txt for final2)
+    for ext in KIND_SOURCE_EXTS.get(kind, (".txt",)):
+        matches = [p for p in files if p.suffix.lower() == ext]
+        if len(matches) == 1:
+            return matches[0]
+        if matches:
+            preferred_names = {
+                f"raw_text{ext}",
+                f"ocr{ext}",
+                f"text{ext}",
+                f"output{ext}",
+                f"result{ext}",
+            }
+            for path in matches:
+                if path.name.lower() in preferred_names:
+                    return path
+            return sorted(matches, key=lambda p: p.name.lower())[0]
 
-    # Prefer raw_text.txt / ocr.txt style names
-    preferred = {"raw_text.txt", "ocr.txt", "text.txt", "output.txt"}
-    for path in txts:
-        if path.name.lower() in preferred:
-            return path
-
-    # Last resort: first txt by name
-    return sorted(txts, key=lambda p: p.name.lower())[0]
+    return sorted(files, key=lambda p: p.name.lower())[0]
 
 
 def collect_from_kind_root(kind_root: Path, kind: str) -> dict[str, Path]:
-    """Map folder_name -> source txt under a kind-specific root."""
+    """Map folder_name -> source file under a kind-specific root."""
     found: dict[str, Path] = {}
     if not kind_root.is_dir():
         return found
+
+    allowed = {e.lower() for e in KIND_SOURCE_EXTS.get(kind, (".txt",))}
 
     for entry in sorted(kind_root.iterdir(), key=lambda p: p.name.lower()):
         if entry.name.startswith(".") or entry.name.startswith("._"):
             continue
 
         if entry.is_dir():
-            src = pick_source_txt(entry, kind)
+            src = pick_source_file(entry, kind)
             if src:
                 found[entry.name] = src
             continue
 
-        # Loose file: folder_name.txt or folder_name_prelim.txt
-        if entry.is_file() and entry.suffix.lower() == ".txt":
+        # Loose file: folder_name.json / folder_name_final2.json / folder_name.txt
+        if entry.is_file() and entry.suffix.lower() in allowed:
             stem = entry.stem
-            # Strip trailing _kind if present so key matches images folder name
             suffix = f"_{kind}"
             if stem.lower().endswith(suffix):
                 folder_name = stem[: -len(suffix)]
@@ -154,11 +184,11 @@ def collect_from_combined_root(ocr_root: Path) -> dict[str, dict[str, Path]]:
         if not entry.is_dir() or entry.name.startswith("."):
             continue
         mapping: dict[str, Path] = {}
-        for path in iter_txt_files(entry):
-            kind = classify_ocr_file(path)
-            if kind and kind not in mapping:
-                mapping[kind] = path
-        # If nothing classified but exactly one txt, leave unset (can't guess kind)
+        for kind in KIND_SUFFIXES:
+            for path in iter_ocr_files(entry, kind):
+                classified = classify_ocr_file(path)
+                if classified == kind and kind not in mapping:
+                    mapping[kind] = path
         if mapping:
             result[entry.name] = mapping
     return result
@@ -178,7 +208,15 @@ def copy_kind(
         return False
 
     ocr_dir = dest_folder / "ocr"
-    dest_name = f"{folder_name}_{kind}.txt"
+    # Keep source extension when it matches kind expectations; else use preferred dest ext
+    src_ext = src.suffix.lower()
+    allowed = {e.lower() for e in KIND_SOURCE_EXTS.get(kind, (".txt",))}
+    dest_ext = src_ext if src_ext in allowed else KIND_DEST_EXT.get(kind, ".txt")
+    # Prefer canonical dest for final2 (.json) when source is json
+    if kind == "final2":
+        dest_ext = ".json" if src_ext == ".json" else (".txt" if src_ext == ".txt" else ".json")
+
+    dest_name = f"{folder_name}_{kind}{dest_ext}"
     dest = ocr_dir / dest_name
 
     note = ""
@@ -198,7 +236,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Copy OCR outputs into images/<folder>/ocr/ as "
-            "<folder>_prelim.txt / _final1.txt / _final2.txt. "
+            "<folder>_prelim.txt / _final1.txt / _final2.json. "
             "Pass --prelim / --final1 / --final2 roots, and/or legacy --ocr-root."
         )
     )
@@ -210,17 +248,17 @@ def main() -> int:
     parser.add_argument(
         "--prelim",
         default=None,
-        help="Root folder of Preliminary (Tess) OCR outputs",
+        help="Root folder of Preliminary (Tess) OCR outputs (.txt)",
     )
     parser.add_argument(
         "--final1",
         default=None,
-        help="Root folder of Final (OSS) OCR outputs",
+        help="Root folder of Final (OSS) OCR outputs (.txt)",
     )
     parser.add_argument(
         "--final2",
         default=None,
-        help="Root folder of Final (AzDocInt) OCR outputs",
+        help="Root folder of Final (AzDocInt) OCR outputs (.json preferred)",
     )
     parser.add_argument(
         "--ocr-root",

@@ -19,10 +19,10 @@ data/folders/<folder_name>/
   pages/2.jpg
   ocr/<folder_name>_prelim.txt     # Preliminary (Tess)
   ocr/<folder_name>_final1.txt     # Final (OSS)
-  ocr/<folder_name>_final2.txt     # Final (AzDocInt)
+  ocr/<folder_name>_final2.json    # Final (AzDocInt) — pages[].content extracted for UI
 ```
 
-OCR files are one document each. Pages are split on filename markers that match the image name exactly:
+OCR text files (prelim / final1) are one document each. Pages are split on filename markers that match the image name exactly:
 
 ```
 ===== 1.jpg =====
@@ -31,6 +31,13 @@ OCR files are one document each. Pages are split on filename markers that match 
 ...page 2 text...
 ```
 
+AzDocInt `_final2.json` uses:
+
+```json
+{ "pages": [ { "fileName": "1.jpg", "content": "..." }, ... ] }
+```
+
+The API extracts `pages[].content` (falling back to `lines[].content`) and serves the same marker format to the UI.
 ## Docker (VM)
 
 Backend listens on **3000**, UI on **3001**.
@@ -145,4 +152,4 @@ See root `.env`:
 - `GET /api/folders` — list folders
 - `GET /api/folders/{id}` — folder + pages
 - `GET /api/folders/{id}/pages/{n}/image` — page image
-- `GET /api/folders/{id}/ocr?kind=preliminary|final1|final2` — folder OCR (`*_prelim.txt` / `*_final1.txt` / `*_final2.txt`)
+- `GET /api/folders/{id}/ocr?kind=preliminary|final1|final2` — folder OCR (`*_prelim.txt` / `*_final1.txt` / `*_final2.json`)

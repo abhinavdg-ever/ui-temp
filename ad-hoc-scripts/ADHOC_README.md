@@ -19,10 +19,10 @@ The scripts write `pages/` and `ocr/` **inside** each folder under the images ro
   ocr/
     <folder_name>_prelim.txt     # Preliminary (Tess)
     <folder_name>_final1.txt     # Final (OSS)
-    <folder_name>_final2.txt     # Final (AzDocInt)
+    <folder_name>_final2.json    # Final (AzDocInt)
 ```
 
-OCR file body pages are marked as:
+OCR text file body pages (prelim / final1) are marked as:
 
 ```
 ===== 1.jpg =====
@@ -31,6 +31,17 @@ OCR file body pages are marked as:
 ...text...
 ```
 
+AzDocInt `_final2.json` looks like:
+
+```json
+{
+  "pages": [
+    { "pageNumber": 1, "fileName": "1.jpg", "content": "..." }
+  ]
+}
+```
+
+The UI extracts `pages[].content` (or `lines[].content` if needed).
 ## 1) Organize page images → `pages/`
 
 ```bash
@@ -72,7 +83,7 @@ images/
 
 ## 2) Organize OCR outputs → `ocr/`
 
-Pass **separate** roots for each OCR kind. Folder names under each root must match the images folders. If a source file is not already named `*_prelim.txt` / `*_final1.txt` / `*_final2.txt`, the script **adds the suffix** on the destination file.
+Pass **separate** roots for each OCR kind. Folder names under each root must match the images folders. If a source file is not already named `*_prelim.txt` / `*_final1.txt` / `*_final2.json`, the script **adds the suffix** on the destination file.
 
 ```bash
 # Preview
@@ -111,13 +122,13 @@ python ad-hoc-scripts\organize_ocr.py `
   <folder_name>.txt       # → images/<folder>/ocr/<folder>_prelim.txt
 ```
 
-Same for `--final1` and `--final2`.
+Same for `--final1`. For `--final2`, prefer `.json` (`.txt` still accepted).
 
 | Flag | Kind | Destination name |
 |------|------|------------------|
 | `--prelim` | Tess | `<folder>_prelim.txt` |
 | `--final1` | OSS | `<folder>_final1.txt` |
-| `--final2` | AzDocInt | `<folder>_final2.txt` |
+| `--final2` | AzDocInt | `<folder>_final2.json` |
 
 You can pass any subset of the three flags (e.g. only `--prelim`).
 
