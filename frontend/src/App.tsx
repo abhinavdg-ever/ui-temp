@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
+import { LogOut } from "lucide-react";
 import LandingPage from "./LandingPage";
 import FolderViewer from "./FolderViewer";
+import LoginPage from "./LoginPage";
+
+const AUTH_KEY = "advantmed_imaging_auth";
 
 type Route =
   | { view: "landing" }
@@ -21,7 +25,16 @@ function pathFor(route: Route): string {
   return "/";
 }
 
+function readAuth(): boolean {
+  try {
+    return sessionStorage.getItem(AUTH_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 export default function App() {
+  const [authed, setAuthed] = useState(readAuth);
   const [route, setRoute] = useState<Route>(() => parsePath(window.location.pathname));
 
   useEffect(() => {
@@ -38,6 +51,33 @@ export default function App() {
     setRoute(next);
   }
 
+  function handleLoginSuccess() {
+    try {
+      sessionStorage.setItem(AUTH_KEY, "1");
+    } catch {
+      /* ignore */
+    }
+    setAuthed(true);
+  }
+
+  function handleLogout() {
+    try {
+      sessionStorage.removeItem(AUTH_KEY);
+    } catch {
+      /* ignore */
+    }
+    setAuthed(false);
+    navigate({ view: "landing" });
+  }
+
+  if (!authed) {
+    return (
+      <div className="shell shell-login">
+        <LoginPage onSuccess={handleLoginSuccess} />
+      </div>
+    );
+  }
+
   return (
     <div className="shell">
       <header className="topbar">
@@ -48,15 +88,23 @@ export default function App() {
             onClick={() => navigate({ view: "landing" })}
             aria-label="Go to home"
           >
-            <img className="brand-mark" src="/advantmed-logo.png" alt="Advantmed" />
+            <img
+              className="brand-wordmark"
+              src="/advantmed-wordmark.svg"
+              alt="Advantmed"
+            />
           </button>
           <div>
-            <strong>Advantmed - Document Processing AI</strong>
+            <strong>Document Processing AI</strong>
             <p>End to End Imaging Pipeline Results</p>
           </div>
         </div>
         <div className="topbar-meta">
           <span className="mode-pill">Local mode</span>
+          <button type="button" className="logout-btn" onClick={handleLogout}>
+            <LogOut size={14} aria-hidden="true" />
+            Log out
+          </button>
         </div>
       </header>
       <main className="main">

@@ -1,0 +1,24 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "3000:3000"
+    environment:
+      DATA_MODE: ${DATA_MODE:-local}
+      DATA_ROOT: /data/folders
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://127.0.0.1:3001,http://localhost:3001}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://user:password@localhost:5432/advantmed_imaging}
+    volumes:
+      # Host document folders → container path used by DATA_ROOT
+      - ${DATA_HOST_PATH:-./data/folders}:/data/folders:ro
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "3001:3001"
+    depends_on:
+      - backend
+    restart: unless-stopped
