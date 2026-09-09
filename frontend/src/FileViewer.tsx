@@ -30,6 +30,8 @@ import {
   readSessionSas,
 } from "./blobAuth";
 import BlobAuthModal from "./BlobAuthModal";
+import FullscreenPageChrome from "./FullscreenPageChrome";
+import { usePageViewerHotkeys } from "./usePageViewerHotkeys";
 
 type Props = {
   onBack: () => void;
@@ -201,6 +203,23 @@ export default function FileViewer({ onBack, initialFolderId = null }: Props) {
       /* ignore */
     }
   }
+
+  function exitFullscreen() {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+    }
+  }
+
+  usePageViewerHotkeys({
+    enabled: Boolean(detail && pageCount > 0 && !(source === "blob" && !blobReady)),
+    pageCount,
+    setPageIndex,
+    zoomBy,
+    setZoom,
+    zoomStep: ZOOM_STEP,
+    isFullscreen,
+    onExitFullscreen: exitFullscreen,
+  });
 
   return (
     <div className="workspace file-viewer">
@@ -425,6 +444,28 @@ export default function FileViewer({ onBack, initialFolderId = null }: Props) {
                   ) : (
                     <div className="ocr-empty">No page selected</div>
                   )}
+                  {isFullscreen ? (
+                    <FullscreenPageChrome
+                      pageIndex={pageIndex}
+                      pageCount={pageCount}
+                      zoom={zoom}
+                      zoomMin={ZOOM_MIN}
+                      zoomMax={ZOOM_MAX}
+                      label={page?.filename}
+                      onZoomOut={() => zoomBy(-ZOOM_STEP)}
+                      onZoomIn={() => zoomBy(ZOOM_STEP)}
+                      onZoomReset={() => setZoom(1)}
+                      onPrev={() => {
+                        setPageIndex((i) => Math.max(0, i - 1));
+                        setZoom(1);
+                      }}
+                      onNext={() => {
+                        setPageIndex((i) => Math.min(pageCount - 1, i + 1));
+                        setZoom(1);
+                      }}
+                      onExitFullscreen={exitFullscreen}
+                    />
+                  ) : null}
                 </div>
 
                 {detail.pages.length > 0 && (

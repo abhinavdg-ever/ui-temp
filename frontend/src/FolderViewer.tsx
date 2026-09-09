@@ -21,6 +21,8 @@ import {
   type OcrKind,
 } from "./api";
 import { ocrTextForFilename } from "./ocrPages";
+import FullscreenPageChrome from "./FullscreenPageChrome";
+import { usePageViewerHotkeys } from "./usePageViewerHotkeys";
 
 type Props = {
   folderId: string;
@@ -185,6 +187,23 @@ export default function FolderViewer({ folderId, onBack }: Props) {
     }
   }
 
+  function exitFullscreen() {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+    }
+  }
+
+  usePageViewerHotkeys({
+    enabled: pageCount > 0,
+    pageCount,
+    setPageIndex,
+    zoomBy,
+    setZoom,
+    zoomStep: ZOOM_STEP,
+    isFullscreen,
+    onExitFullscreen: exitFullscreen,
+  });
+
   return (
     <div className="workspace">
       <div className="workspace-header">
@@ -311,6 +330,28 @@ export default function FolderViewer({ folderId, onBack }: Props) {
                   {loadingFolder ? "Loading pages…" : "No pages in this folder"}
                 </div>
               )}
+              {isFullscreen ? (
+                <FullscreenPageChrome
+                  pageIndex={pageIndex}
+                  pageCount={pageCount}
+                  zoom={zoom}
+                  zoomMin={ZOOM_MIN}
+                  zoomMax={ZOOM_MAX}
+                  label={page?.filename}
+                  onZoomOut={() => zoomBy(-ZOOM_STEP)}
+                  onZoomIn={() => zoomBy(ZOOM_STEP)}
+                  onZoomReset={() => setZoom(1)}
+                  onPrev={() => {
+                    setPageIndex((i) => Math.max(0, i - 1));
+                    setZoom(1);
+                  }}
+                  onNext={() => {
+                    setPageIndex((i) => Math.min(pageCount - 1, i + 1));
+                    setZoom(1);
+                  }}
+                  onExitFullscreen={exitFullscreen}
+                />
+              ) : null}
             </div>
             {folder && folder.pages.length > 0 && (
               <div className="filmstrip" role="listbox" aria-label="Page thumbnails">
