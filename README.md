@@ -180,8 +180,9 @@ See root `.env`:
 |----------|-------------|
 | `DATA_MODE` | `local` (CSV metadata + file OCR) or `postgres` (manifest + OCR from DB) |
 | `DATA_ROOT` | Path to folders root (page images; Docker uses `/data/folders`) |
-| `METADATA_ROOT` | Manifest CSVs when `DATA_MODE=local` (`../06-postgres-db/metadata` in monorepo, or `./postgres-db/metadata`) |
+| `METADATA_ROOT` | Manifest CSVs when `DATA_MODE=local` (`../06-postgres-db/manifest` in monorepo, or `./postgres-db/manifest`) |
 | `DATA_HOST_PATH` | Host path mounted into Docker backend (default `./data/folders`) |
+| `METADATA_HOST_PATH` | Host Manifest CSV dir for Docker (default `./postgres-db/manifest`) |
 | `DATABASE_URL` | Postgres URL (`DATA_MODE=postgres` reads `manifest_member_list` + `ocr_results`) |
 | `ALLOWED_ORIGINS` | CORS origins for direct API access |
 | `FILE_VIEWER_BLOB_ENABLED` | Show Local / Blob toggle in File Viewer |

@@ -130,7 +130,7 @@ class LocalFolderRepository(FolderRepository):
       # text OCR sections: ===== 1.jpg =====
 
     Manifest Details (DATA_MODE=local): stacked metadata_R{n}_B{n}.csv under metadata_root
-    (default postgres-db/metadata). Postgres mode reads manifest_member_list from DB instead.
+    (default 06-postgres-db/manifest). Postgres mode reads manifest_member_list from DB instead.
     """
 
     def __init__(self, data_root: Path, metadata_root: Path | None = None):
@@ -193,7 +193,7 @@ class LocalFolderRepository(FolderRepository):
         )
 
     def _manifest_for_folder(self, folder_id: str) -> ImagingManifestDetails:
-        """DATA_MODE=local: read from postgres-db/metadata metadata_Rn_Bn CSVs."""
+        """DATA_MODE=local: read from 06-postgres-db/manifest metadata_Rn_Bn CSVs."""
         if self.metadata_root is not None:
             found = manifest_for_record(self.metadata_root, folder_id)
             if found is not None:

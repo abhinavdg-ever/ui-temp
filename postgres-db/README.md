@@ -9,7 +9,7 @@ AI Project POC/
   05-imaging-ui/                 ← UI app + .env + data/folders
   06-postgres-db/                ← this pack
     ddl-scripts/
-    metadata/Metadata_R1_B1.csv
+    manifest/metadata_R1_B1.csv
     db-insert-scripts/load_from_folders.py
 ```
 
@@ -28,7 +28,7 @@ The insert script auto-detects either layout and loads `DATABASE_URL` from `05-i
 
 | Mode | Manifest | OCR |
 |------|----------|-----|
-| `local` | `06-postgres-db/metadata` (or nested `postgres-db/metadata`) | Local `ocr/` files |
+| `local` | `06-postgres-db/manifest` (or nested `postgres-db/manifest`) | Local `ocr/` files |
 | `postgres` | `manifest_member_list` | `ocr_results` |
 
 ## Quick start (Windows monorepo)

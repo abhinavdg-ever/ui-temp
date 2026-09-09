@@ -1,26 +1,24 @@
 #!/usr/bin/env python3
 """Load chart folders + metadata + OCR into Postgres (abridged schema).
 
-Expected layouts:
-
   Monorepo (AI Project POC):
     05-imaging-ui/          ← DATA_ROOT, .env
-    06-postgres-db/         ← this pack (ddl, metadata, db-insert-scripts)
+    06-postgres-db/         ← this pack (ddl, manifest/, db-insert-scripts)
 
   Nested (standalone imaging-ui repo):
     imaging-ui/
       data/folders/
-      postgres-db/          ← this pack
+      postgres-db/          ← this pack (manifest/)
       .env
 
 db-insert writes:
   - chart_list / page_list   ← <imaging-ui>/data/folders/<chart>/pages
-  - manifest_member_list     ← stacked metadata_R{n}_B{n}.csv (or Metadata_R*_B*.csv)
+  - manifest_member_list     ← stacked metadata_R{n}_B{n}.csv under manifest/
   - ocr_results              ← ocr/*_prelim / *_final1 / *_final2
 
 Usage (from either layout; .env is auto-loaded from 05-imaging-ui when present):
-  python load_from_folders.py --ddl
-  python load_from_folders.py --metadata-dir ../metadata
+  python load_from_folders.py
+  python load_from_folders.py --metadata-dir ../manifest
 """
 
 from __future__ import annotations
@@ -39,7 +37,18 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 PG_PACK_ROOT = SCRIPT_DIR.parent  # …/06-postgres-db or …/postgres-db
 DDL_PATH = PG_PACK_ROOT / "ddl-scripts" / "001_schema.sql"
-DEFAULT_METADATA_DIR = PG_PACK_ROOT / "metadata"
+
+
+def default_manifest_dir() -> Path:
+    """Prefer manifest/; fall back to legacy metadata/."""
+    for name in ("manifest", "metadata"):
+        cand = PG_PACK_ROOT / name
+        if cand.is_dir():
+            return cand
+    return PG_PACK_ROOT / "manifest"
+
+
+DEFAULT_METADATA_DIR = default_manifest_dir()
 
 # Sibling UI folder names under the monorepo root
 _IMAGING_UI_DIR_NAMES = (
@@ -577,7 +586,7 @@ def main() -> None:
         "--metadata-dir",
         type=Path,
         default=DEFAULT_METADATA_DIR,
-        help="Directory of metadata_R{n}_B{n}.csv files (default: ../metadata)",
+        help="Directory of metadata_R{n}_B{n}.csv files (default: ../manifest)",
     )
     parser.add_argument(
         "--metadata-csv",

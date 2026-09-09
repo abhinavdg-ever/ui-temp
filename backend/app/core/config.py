@@ -17,8 +17,8 @@ class Settings(BaseSettings):
     data_mode: Literal["local", "postgres"] = "local"
     data_root: str = "./data/folders"
     # Local mode: stacked metadata_R{n}_B{n}.csv for Manifest Details
-    # Monorepo: ../06-postgres-db/metadata  |  Nested: ./postgres-db/metadata
-    metadata_root: str = "../06-postgres-db/metadata"
+    # Monorepo: ../06-postgres-db/manifest  |  Nested: ./postgres-db/manifest
+    metadata_root: str = "../06-postgres-db/manifest"
     database_url: str = "postgresql+psycopg://user:password@localhost:5432/advantmed_imaging"
     api_host: str = "127.0.0.1"
     api_port: int = 8002
@@ -51,18 +51,49 @@ class Settings(BaseSettings):
 
     @property
     def resolved_metadata_root(self) -> Path:
+        """Local-mode CSV root: prefer 06-postgres-db/manifest (legacy: metadata/)."""
         path = Path(self.metadata_root)
         if not path.is_absolute():
             path = (ROOT_DIR / path).resolve()
-        if path.is_dir():
-            return path
-        # Fallbacks: nested pack inside this repo, or sibling 06-postgres-db
-        nested = (ROOT_DIR / "postgres-db" / "metadata").resolve()
-        if nested.is_dir():
-            return nested
-        sibling = (ROOT_DIR.parent / "06-postgres-db" / "metadata").resolve()
-        if sibling.is_dir():
-            return sibling
+
+        candidates: list[Path] = []
+        # If .env still says .../metadata, try sibling manifest first
+        if path.name.lower() == "metadata":
+            candidates.append(path.parent / "manifest")
+        candidates.append(path)
+        if path.name.lower() == "manifest":
+            candidates.append(path.parent / "metadata")
+        candidates.extend(
+            [
+                ROOT_DIR / "postgres-db" / "manifest",
+                ROOT_DIR.parent / "06-postgres-db" / "manifest",
+                ROOT_DIR / "postgres-db" / "metadata",
+                ROOT_DIR.parent / "06-postgres-db" / "metadata",
+            ]
+        )
+
+        seen: set[Path] = set()
+        with_csv: list[Path] = []
+        empty_dirs: list[Path] = []
+        for cand in candidates:
+            resolved = cand.resolve()
+            if resolved in seen or not resolved.is_dir():
+                continue
+            seen.add(resolved)
+            has_csv = any(
+                p.is_file()
+                and p.name.lower().startswith("metadata_r")
+                and p.name.lower().endswith(".csv")
+                for p in resolved.iterdir()
+            )
+            if has_csv:
+                with_csv.append(resolved)
+            else:
+                empty_dirs.append(resolved)
+        if with_csv:
+            return with_csv[0]
+        if empty_dirs:
+            return empty_dirs[0]
         return path
 
     @property
