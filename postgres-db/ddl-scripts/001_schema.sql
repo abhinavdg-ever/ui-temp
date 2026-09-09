@@ -85,7 +85,9 @@ CREATE TABLE ocr_results (
     id          BIGSERIAL PRIMARY KEY,
     chart_id    BIGINT NOT NULL REFERENCES chart_list(id) ON DELETE CASCADE,
     page_id     BIGINT NOT NULL REFERENCES page_list(id) ON DELETE CASCADE,
+    -- prelim → tesseract | final1 → docling | final2 → azuredocintel
     ocr_type    VARCHAR(30) NOT NULL CHECK (ocr_type IN ('tesseract','docling','azuredocintel')),
+    -- Store as-is: plain text (tesseract/docling) or JSON string (azuredocintel). Mix is OK.
     raw_text    TEXT,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()

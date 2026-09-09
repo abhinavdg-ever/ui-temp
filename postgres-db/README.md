@@ -1,58 +1,52 @@
 # Postgres DB pack (abridged imaging schema)
 
-Scaffold for DDL + seed/load scripts. **Loaded now:** metadata (`manifest_member_list`) from a **single CSV**, and `ocr_results`. Quality / DOS / imaging result formats come next.
+## Data flow
+
+| Table | Direction | Notes |
+|-------|-----------|--------|
+| `manifest_member_list` | **READ** from Postgres | Seed via single metadata CSV / upstream |
+| `chart_list` | **WRITE** | `blob_container_name` ← `BLOB_CONTAINER`, `path` ← `BLOB_PATH_TEMPLATE` with `{folder}` = chart name, `chart_name` ← folder name |
+| `page_list` | **WRITE** | Pages under each chart |
+| `ocr_results` | **WRITE** | See OCR mapping; `raw_text` holds plain text **or** JSON string |
 
 ## Layout
 
 ```
 postgres-db/
-  ddl-scripts/
-    001_schema.sql          # abridged schema (chart/page/manifest/ocr/…)
-  metadata/
-    B1_R1_DummyMetadata.csv # single metadata CSV (Excel format) — not split per folder
-    README.md
-  db-insert-scripts/
-    load_from_folders.py    # load charts, pages, metadata, OCR
-    requirements.txt
+  ddl-scripts/001_schema.sql
+  metadata/B1_R1_DummyMetadata.csv
+  db-insert-scripts/load_from_folders.py
 ```
-
-## Metadata format
-
-One file: `metadata/B1_R1_DummyMetadata.csv`
-
-Columns: `recordId,DummyFirstName,DummyLastName,DummyDOB,MemberID`
-
-`recordId` matches `data/folders/<recordId>/` when a folder exists.
 
 ## OCR mapping
 
-| File | `ocr_results.ocr_type` |
-|------|------------------------|
-| `*_prelim.txt` | `tesseract` |
-| `*_final1.txt` | `docling` |
-| `*_final2.json` / `.txt` | `azuredocintel` |
+| File / stage | `ocr_type` | `raw_text` |
+|--------------|------------|------------|
+| prelim (Tess) | `tesseract` | plain text |
+| final1 (docling) | `docling` | plain text |
+| final2 (AzDocInt) | `azuredocintel` | JSON and/or text — mix OK |
 
-Page text is split on `===== 1.jpg =====` markers (same as the UI).
+## Env (shared with File Viewer)
+
+```bash
+BLOB_CONTAINER=my-container
+BLOB_PATH_TEMPLATE={folder}/pages/{filename}
+DATABASE_URL=postgresql://...
+```
 
 ## Quick start
 
 ```bash
 cd postgres-db/db-insert-scripts
-python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-
 export DATABASE_URL=postgresql://USER:PASS@localhost:5432/imaging
-export DATA_ROOT=../../data/folders   # optional; default is repo data/folders
-
+export BLOB_CONTAINER=...
+export BLOB_PATH_TEMPLATE='{folder}/pages/{filename}'
 python load_from_folders.py --ddl
-# defaults to ../metadata/B1_R1_DummyMetadata.csv
-python load_from_folders.py --metadata-csv ../metadata/B1_R1_DummyMetadata.csv
 ```
 
 ## Not loaded yet
 
-Schema includes but loaders wait on formats:
-
 - `ocr_quality_results`
 - `dos_extraction_results`
-- imaging JSON → future tables (verification / classification / …)
+- imaging verification / classification formats

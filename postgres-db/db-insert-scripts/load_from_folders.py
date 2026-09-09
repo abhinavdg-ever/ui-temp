@@ -162,18 +162,25 @@ def apply_ddl(conn: psycopg.Connection, ddl_path: Path) -> None:
     print(f"Applied DDL: {ddl_path}")
 
 
-def upsert_chart(cur: psycopg.Cursor, chart_name: str, page_count: int, path: str) -> int:
+def upsert_chart(
+    cur: psycopg.Cursor,
+    chart_name: str,
+    page_count: int,
+    path: str,
+    container_name: str | None = None,
+) -> int:
     cur.execute(
         """
-        INSERT INTO chart_list (chart_name, page_count, status, path)
-        VALUES (%s, %s, 'received', %s)
+        INSERT INTO chart_list (chart_name, page_count, status, path, blob_container_name)
+        VALUES (%s, %s, 'received', %s, %s)
         ON CONFLICT (chart_name) DO UPDATE
             SET page_count = EXCLUDED.page_count,
                 path = EXCLUDED.path,
+                blob_container_name = COALESCE(EXCLUDED.blob_container_name, chart_list.blob_container_name),
                 updated_at = now()
         RETURNING id
         """,
-        (chart_name, page_count, path),
+        (chart_name, page_count, path, container_name or None),
     )
     return int(cur.fetchone()[0])
 
@@ -225,6 +232,7 @@ def load_ocr_for_chart(
     folder: Path,
     page_ids: dict[str, int],
 ) -> int:
+    """Write ocr_results. raw_text is stored as-is (plain text or JSON string)."""
     cur.execute("DELETE FROM ocr_results WHERE chart_id = %s", (chart_id,))
     inserted = 0
     for suffix, ocr_type, exts in OCR_FILE_MAP:
@@ -232,24 +240,53 @@ def load_ocr_for_chart(
         if not path:
             continue
         raw = path.read_text(encoding="utf-8", errors="replace")
+        # Keep JSON files as JSON text in raw_text; plain files stay plain text.
+        # For page splitting only, derive a marker view when needed.
         if path.suffix.lower() == ".json":
             try:
-                text = azdoc_json_to_marker_text(raw)
+                split_source = azdoc_json_to_marker_text(raw)
             except json.JSONDecodeError:
-                text = raw
+                split_source = raw
+            store_raw = raw  # store original JSON string
         else:
-            text = raw
+            split_source = raw
+            store_raw = raw
 
-        by_page = split_ocr_by_page(text)
-        if "__all__" in by_page:
-            # no markers — attach same text to every page
+        by_page = split_ocr_by_page(split_source)
+        if "__all__" in by_page or path.suffix.lower() == ".json":
+            # Document-level JSON: one row per page with same JSON blob, or unsplit text
+            payload = store_raw if path.suffix.lower() == ".json" else by_page.get("__all__", store_raw)
+            if path.suffix.lower() == ".json" and "__all__" not in by_page:
+                # Prefer per-page text extracted from JSON when markers exist; still allow JSON mix
+                for page_name, page_id in page_ids.items():
+                    chunk = by_page.get(page_name)
+                    if chunk is None:
+                        for key, val in by_page.items():
+                            if key.lower() == page_name.lower():
+                                chunk = val
+                                break
+                    # Store page text when available; otherwise full JSON string
+                    text_value = chunk if chunk is not None else store_raw
+                    cur.execute(
+                        """
+                        INSERT INTO ocr_results (chart_id, page_id, ocr_type, raw_text)
+                        VALUES (%s, %s, %s, %s)
+                        """,
+                        (chart_id, page_id, ocr_type, text_value),
+                    )
+                    inserted += 1
+                    cur.execute(
+                        "UPDATE page_list SET ocr_final_status = 'completed' WHERE id = %s",
+                        (page_id,),
+                    )
+                continue
             for page_name, page_id in page_ids.items():
                 cur.execute(
                     """
                     INSERT INTO ocr_results (chart_id, page_id, ocr_type, raw_text)
                     VALUES (%s, %s, %s, %s)
                     """,
-                    (chart_id, page_id, ocr_type, by_page["__all__"]),
+                    (chart_id, page_id, ocr_type, payload),
                 )
                 inserted += 1
                 status_col = (
@@ -264,7 +301,6 @@ def load_ocr_for_chart(
         for page_name, page_id in page_ids.items():
             chunk = by_page.get(page_name)
             if chunk is None:
-                # try case-insensitive
                 for key, val in by_page.items():
                     if key.lower() == page_name.lower():
                         chunk = val
@@ -289,10 +325,23 @@ def load_ocr_for_chart(
     return inserted
 
 
+def chart_blob_path(path_template: str, folder_name: str) -> str:
+    """Resolve chart_list.path from BLOB_PATH_TEMPLATE (folder name = chart)."""
+    path = (
+        (path_template or "{folder}")
+        .replace("{folder}", folder_name)
+        .replace("{filename}", "")
+        .replace("{page}", "")
+    )
+    return re.sub(r"/+", "/", path).strip("/")
+
+
 def load_folders(
     conn: psycopg.Connection,
     data_root: Path,
     metadata_csv: Path,
+    container_name: str,
+    path_template: str,
 ) -> None:
     by_record: dict[str, list[dict[str, str]]] = {}
     for row in read_metadata_rows(metadata_csv):
@@ -311,11 +360,13 @@ def load_folders(
     with conn.cursor() as cur:
         for folder in folders:
             pages = list_page_files(folder)
+            chart_path = chart_blob_path(path_template, folder.name)
             chart_id = upsert_chart(
                 cur,
                 folder.name,
                 len(pages),
-                str(folder.relative_to(data_root.parent) if data_root.parent.exists() else folder),
+                chart_path,
+                container_name=container_name or None,
             )
             page_ids: dict[str, int] = {}
             for page_name, _num in pages:
@@ -326,15 +377,21 @@ def load_folders(
             n_ocr = load_ocr_for_chart(cur, chart_id, folder, page_ids) if page_ids else 0
             print(
                 f"  {folder.name}: chart_id={chart_id} pages={len(pages)} "
-                f"manifest={n_meta} ocr_rows={n_ocr}"
+                f"manifest={n_meta} ocr_rows={n_ocr} path={chart_path}"
             )
 
-        # Charts present only in the single metadata CSV (no folder yet)
         existing = {f.name for f in folders}
         for record_id, rows in by_record.items():
             if record_id in existing:
                 continue
-            chart_id = upsert_chart(cur, record_id, 0, f"metadata-only/{record_id}")
+            chart_path = chart_blob_path(path_template, record_id)
+            chart_id = upsert_chart(
+                cur,
+                record_id,
+                0,
+                chart_path,
+                container_name=container_name or None,
+            )
             n_meta = load_metadata_for_chart(cur, chart_id, rows)
             print(f"  {record_id}: chart_id={chart_id} metadata-only manifest={n_meta}")
 
@@ -364,7 +421,17 @@ def main() -> None:
         "--metadata-csv",
         type=Path,
         default=default_metadata,
-        help="Single metadata CSV (B1_R1_DummyMetadata format). Default: postgres-db/metadata/B1_R1_DummyMetadata.csv",
+        help="Single metadata CSV (B1_R1_DummyMetadata format)",
+    )
+    parser.add_argument(
+        "--container-name",
+        default=os.environ.get("BLOB_CONTAINER", ""),
+        help="chart_list.blob_container_name (env BLOB_CONTAINER)",
+    )
+    parser.add_argument(
+        "--path-template",
+        default=os.environ.get("BLOB_PATH_TEMPLATE", "{folder}/pages/{filename}"),
+        help="Blob path template (env BLOB_PATH_TEMPLATE); {folder}=chart_name",
     )
     args = parser.parse_args()
 
@@ -386,7 +453,16 @@ def main() -> None:
         if args.ddl:
             apply_ddl(conn, DDL_PATH)
         print(f"Loading from {data_root}")
-        load_folders(conn, data_root, metadata_csv)
+        if args.container_name:
+            print(f"BLOB_CONTAINER={args.container_name}")
+        print(f"BLOB_PATH_TEMPLATE={args.path_template}")
+        load_folders(
+            conn,
+            data_root,
+            metadata_csv,
+            args.container_name,
+            args.path_template,
+        )
         print("Done.")
 
 
