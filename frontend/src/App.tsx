@@ -1,16 +1,25 @@
 import { useEffect, useState } from "react";
-import { LogOut } from "lucide-react";
 import LandingPage from "./LandingPage";
 import FolderViewer from "./FolderViewer";
+import FileViewer from "./FileViewer";
 import LoginPage from "./LoginPage";
+import UserProfileMenu from "./UserProfileMenu";
 
 const AUTH_KEY = "advantmed_imaging_auth";
 
 type Route =
   | { view: "landing" }
-  | { view: "folder"; folderId: string };
+  | { view: "folder"; folderId: string }
+  | { view: "file-viewer"; folderId?: string };
 
 function parsePath(pathname: string): Route {
+  const fileMatch = pathname.match(/^\/file-viewer(?:\/([^/]+))?\/?$/);
+  if (fileMatch) {
+    return {
+      view: "file-viewer",
+      folderId: fileMatch[1] ? decodeURIComponent(fileMatch[1]) : undefined,
+    };
+  }
   const match = pathname.match(/^\/folders\/([^/]+)\/?$/);
   if (match) {
     return { view: "folder", folderId: decodeURIComponent(match[1]) };
@@ -21,6 +30,11 @@ function parsePath(pathname: string): Route {
 function pathFor(route: Route): string {
   if (route.view === "folder") {
     return `/folders/${encodeURIComponent(route.folderId)}`;
+  }
+  if (route.view === "file-viewer") {
+    return route.folderId
+      ? `/file-viewer/${encodeURIComponent(route.folderId)}`
+      : "/file-viewer";
   }
   return "/";
 }
@@ -101,15 +115,27 @@ export default function App() {
         </div>
         <div className="topbar-meta">
           <span className="mode-pill">Local mode</span>
-          <button type="button" className="logout-btn" onClick={handleLogout}>
-            <LogOut size={14} aria-hidden="true" />
-            Log out
-          </button>
+          <UserProfileMenu
+            displayName="imaging-user"
+            initials="IU"
+            currentView={route.view}
+            onOpenFileViewer={() => navigate({ view: "file-viewer" })}
+            onOpenHistory={() => navigate({ view: "landing" })}
+            onLogout={handleLogout}
+          />
         </div>
       </header>
       <main className="main">
         {route.view === "landing" ? (
-          <LandingPage onView={(folderId) => navigate({ view: "folder", folderId })} />
+          <LandingPage
+            onView={(folderId) => navigate({ view: "folder", folderId })}
+            onOpenFileViewer={() => navigate({ view: "file-viewer" })}
+          />
+        ) : route.view === "file-viewer" ? (
+          <FileViewer
+            initialFolderId={route.folderId ?? null}
+            onBack={() => navigate({ view: "landing" })}
+          />
         ) : (
           <FolderViewer
             folderId={route.folderId}

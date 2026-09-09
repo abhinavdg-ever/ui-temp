@@ -146,6 +146,11 @@ See root `.env`:
 | `DATA_HOST_PATH` | Host path mounted into Docker backend (default `./data/folders`) |
 | `DATABASE_URL` | Postgres URL (postgres mode — not implemented yet) |
 | `ALLOWED_ORIGINS` | CORS origins for direct API access |
+| `FILE_VIEWER_BLOB_ENABLED` | Show Local / Blob toggle in File Viewer |
+| `BLOB_ACCOUNT_URL` | Azure (or compatible) account URL |
+| `BLOB_CONTAINER` | Blob container name |
+| `BLOB_PATH_TEMPLATE` | Object key template (`{folder}`, `{filename}`, `{page}`) |
+| `BLOB_SAS_TOKEN` | Optional SAS. If empty, UI asks once per session |
 
 ## API
 

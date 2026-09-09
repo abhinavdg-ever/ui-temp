@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   ChevronLeft,
@@ -6,7 +6,11 @@ import {
   Copy,
   Download,
   FileText,
+  Maximize2,
+  Minimize2,
   ScanSearch,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import {
   getFolder,
@@ -26,6 +30,9 @@ type Props = {
 type OutputMode = "ocr" | "imaging";
 
 const OCR_TABS: OcrKind[] = ["preliminary", "final1", "final2"];
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 3;
+const ZOOM_STEP = 0.25;
 
 const KIND_FILE_SUFFIX: Record<OcrKind, string> = {
   preliminary: "prelim",
@@ -61,6 +68,9 @@ export default function FolderViewer({ folderId, onBack }: Props) {
   const [loadingOcr, setLoadingOcr] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const pageStageRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -69,6 +79,7 @@ export default function FolderViewer({ folderId, onBack }: Props) {
     setPageIndex(0);
     setOutputMode("ocr");
     setOcrTab("preliminary");
+    setZoom(1);
     getFolder(folderId)
       .then((data) => {
         if (!cancelled) setFolder(data);
@@ -85,6 +96,14 @@ export default function FolderViewer({ folderId, onBack }: Props) {
       cancelled = true;
     };
   }, [folderId]);
+
+  useEffect(() => {
+    function onFsChange() {
+      setIsFullscreen(document.fullscreenElement === pageStageRef.current);
+    }
+    document.addEventListener("fullscreenchange", onFsChange);
+    return () => document.removeEventListener("fullscreenchange", onFsChange);
+  }, []);
 
   const page = folder?.pages[pageIndex] ?? null;
 
@@ -148,6 +167,24 @@ export default function FolderViewer({ folderId, onBack }: Props) {
     }
   }
 
+  function zoomBy(delta: number) {
+    setZoom((z) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round((z + delta) * 100) / 100)));
+  }
+
+  async function toggleFullscreen() {
+    const el = pageStageRef.current;
+    if (!el) return;
+    try {
+      if (document.fullscreenElement === el) {
+        await document.exitFullscreen();
+      } else {
+        await el.requestFullscreen();
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
   return (
     <div className="workspace">
       <div className="workspace-header">
@@ -198,33 +235,76 @@ export default function FolderViewer({ folderId, onBack }: Props) {
           <section className="pane" aria-label="Page viewer">
             <div className="pane-header">
               <h2>Page{page ? ` · ${page.filename}` : ""}</h2>
-              <div className="pager-nav">
+              <div className="page-toolbar">
+                <div className="zoom-controls" role="group" aria-label="Zoom">
+                  <button
+                    type="button"
+                    onClick={() => zoomBy(-ZOOM_STEP)}
+                    disabled={zoom <= ZOOM_MIN}
+                    aria-label="Zoom out"
+                    title="Zoom out"
+                  >
+                    <ZoomOut size={15} />
+                  </button>
+                  <button
+                    type="button"
+                    className="zoom-reset"
+                    onClick={() => setZoom(1)}
+                    title="Reset zoom"
+                  >
+                    {Math.round(zoom * 100)}%
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => zoomBy(ZOOM_STEP)}
+                    disabled={zoom >= ZOOM_MAX}
+                    aria-label="Zoom in"
+                    title="Zoom in"
+                  >
+                    <ZoomIn size={15} />
+                  </button>
+                </div>
                 <button
                   type="button"
-                  disabled={pageIndex <= 0}
-                  onClick={() => setPageIndex((i) => Math.max(0, i - 1))}
-                  aria-label="Previous page"
+                  className="fullscreen-btn"
+                  onClick={() => void toggleFullscreen()}
+                  aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+                  title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
                 >
-                  <ChevronLeft size={16} />
+                  {isFullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
                 </button>
-                <span className="pager-label">
-                  {pageCount === 0 ? "—" : `${pageIndex + 1} / ${pageCount}`}
-                </span>
-                <button
-                  type="button"
-                  disabled={pageIndex >= pageCount - 1}
-                  onClick={() => setPageIndex((i) => Math.min(pageCount - 1, i + 1))}
-                  aria-label="Next page"
-                >
-                  <ChevronRight size={16} />
-                </button>
+                <div className="pager-nav">
+                  <button
+                    type="button"
+                    disabled={pageIndex <= 0}
+                    onClick={() => setPageIndex((i) => Math.max(0, i - 1))}
+                    aria-label="Previous page"
+                  >
+                    <ChevronLeft size={16} />
+                  </button>
+                  <span className="pager-label">
+                    {pageCount === 0 ? "—" : `${pageIndex + 1} / ${pageCount}`}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={pageIndex >= pageCount - 1}
+                    onClick={() => setPageIndex((i) => Math.min(pageCount - 1, i + 1))}
+                    aria-label="Next page"
+                  >
+                    <ChevronRight size={16} />
+                  </button>
+                </div>
               </div>
             </div>
-            <div className="page-stage">
+            <div
+              className={`page-stage${isFullscreen ? " is-fullscreen" : ""}`}
+              ref={pageStageRef}
+            >
               {page ? (
                 <img
                   src={pageImageUrl(folderId, page.page_number)}
                   alt={page.filename}
+                  style={{ transform: `scale(${zoom})`, transformOrigin: "center center" }}
                 />
               ) : (
                 <div className="ocr-empty">
@@ -239,7 +319,10 @@ export default function FolderViewer({ folderId, onBack }: Props) {
                     key={p.filename}
                     type="button"
                     className={`filmstrip-thumb${idx === pageIndex ? " active" : ""}`}
-                    onClick={() => setPageIndex(idx)}
+                    onClick={() => {
+                      setPageIndex(idx);
+                      setZoom(1);
+                    }}
                     aria-label={`Go to ${p.filename}`}
                     aria-selected={idx === pageIndex}
                     title={p.filename}

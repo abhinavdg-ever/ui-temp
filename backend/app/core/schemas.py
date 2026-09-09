@@ -46,3 +46,15 @@ class OcrTextResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     data_mode: str
+
+
+class AppConfigResponse(BaseModel):
+    data_mode: str
+    file_viewer_blob_enabled: bool = False
+    blob_account_url: str = ""
+    blob_container: str = ""
+    blob_path_template: str = "{folder}/pages/{filename}"
+    # When true, UI must collect a SAS / access token once for the session
+    blob_auth_required: bool = False
+    # Present only when configured server-side (not required from UI)
+    blob_sas_configured: bool = False

@@ -3,6 +3,7 @@ import {
   ChevronLeft,
   ChevronRight,
   FileText,
+  FolderOpen,
   Inbox,
   RefreshCw,
   ScanSearch,
@@ -19,6 +20,7 @@ const PAGE_SIZE = 15;
 
 type Props = {
   onView: (folderId: string) => void;
+  onOpenFileViewer?: () => void;
 };
 
 type SortKey = "filename" | "pages" | "updated";
@@ -67,7 +69,7 @@ function compareFolders(a: FolderSummary, b: FolderSummary, key: SortKey, dir: S
   return a.name.localeCompare(b.name) * sign;
 }
 
-export default function LandingPage({ onView }: Props) {
+export default function LandingPage({ onView, onOpenFileViewer }: Props) {
   const [folders, setFolders] = useState<FolderSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -162,8 +164,16 @@ export default function LandingPage({ onView }: Props) {
     <div className="landing">
       <div className="landing-home">
         <div className="landing-intro">
-          <h1>History</h1>
-          <p>Browse processed folders, and view OCR and Imaging Pipeline Results.</p>
+          <div>
+            <h1>History</h1>
+            <p>Browse processed folders, and view OCR and Imaging Pipeline Results.</p>
+          </div>
+          {onOpenFileViewer ? (
+            <button type="button" className="landing-file-viewer-btn" onClick={onOpenFileViewer}>
+              <FolderOpen size={15} aria-hidden="true" />
+              File Viewer
+            </button>
+          ) : null}
         </div>
 
         {folders.length > 0 && (

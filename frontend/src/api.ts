@@ -32,6 +32,16 @@ export type OcrTextResponse = {
   text: string;
 };
 
+export type AppConfig = {
+  data_mode: string;
+  file_viewer_blob_enabled: boolean;
+  blob_account_url: string;
+  blob_container: string;
+  blob_path_template: string;
+  blob_auth_required: boolean;
+  blob_sas_configured: boolean;
+};
+
 export const OCR_TAB_LABELS: Record<OcrKind, string> = {
   preliminary: "Preliminary (Tess)",
   final1: "Final (OSS)",
@@ -52,6 +62,10 @@ async function api<T>(path: string): Promise<T> {
     throw new Error(detail || `${res.status} ${res.statusText}`);
   }
   return res.json() as Promise<T>;
+}
+
+export function getAppConfig(): Promise<AppConfig> {
+  return api("/api/config");
 }
 
 export function listFolders(): Promise<FolderSummary[]> {
