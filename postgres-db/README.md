@@ -1,38 +1,30 @@
 # Postgres DB pack (abridged imaging schema)
 
-## Data flow
+## DATA_MODE
 
-| Table | Direction | Notes |
-|-------|-----------|--------|
-| `manifest_member_list` | **READ** from Postgres | Seed via single metadata CSV / upstream |
-| `chart_list` | **WRITE** | `blob_container_name` ← `BLOB_CONTAINER`, `path` ← `BLOB_PATH_TEMPLATE` with `{folder}` = chart name, `chart_name` ← folder name |
-| `page_list` | **WRITE** | Pages under each chart |
-| `ocr_results` | **WRITE** | See OCR mapping; `raw_text` holds plain text **or** JSON string |
+| Mode | Manifest | OCR |
+|------|----------|-----|
+| `local` | `postgres-db/metadata/metadata_R*_B*.csv` | Local `ocr/` files |
+| `postgres` | `manifest_member_list` | `ocr_results` |
 
-## Layout
+## Data flow (db-insert **writes** to Postgres)
 
-```
-postgres-db/
-  ddl-scripts/001_schema.sql
-  metadata/B1_R1_DummyMetadata.csv
-  db-insert-scripts/load_from_folders.py
-```
+| Table | Written by insert script | Notes |
+|-------|--------------------------|--------|
+| `manifest_member_list` | **YES** | From stacked `metadata_R{n}_B{n}.csv` |
+| `chart_list` | **YES** | Folder name = `chart_name`; `BLOB_CONTAINER` / `BLOB_PATH_TEMPLATE` |
+| `page_list` | **YES** | Pages under each chart |
+| `ocr_results` | **YES** | prelim→tesseract, final1→docling, final2→azuredocintel |
 
 ## OCR mapping
 
-| File / stage | `ocr_type` | `raw_text` |
-|--------------|------------|------------|
-| prelim (Tess) | `tesseract` | plain text |
-| final1 (docling) | `docling` | plain text |
-| final2 (AzDocInt) | `azuredocintel` | JSON and/or text — mix OK |
+| File / stage | `ocr_type` | UI kind |
+|--------------|------------|---------|
+| prelim (Tess) | `tesseract` | `preliminary` |
+| final1 | `docling` | `final1` |
+| final2 | `azuredocintel` | `final2` |
 
-## Env (shared with File Viewer)
-
-```bash
-BLOB_CONTAINER=my-container
-BLOB_PATH_TEMPLATE={folder}/pages/{filename}
-DATABASE_URL=postgresql://...
-```
+`raw_text` may be plain text or JSON string.
 
 ## Quick start
 
@@ -42,7 +34,11 @@ pip install -r requirements.txt
 export DATABASE_URL=postgresql://USER:PASS@localhost:5432/imaging
 export BLOB_CONTAINER=...
 export BLOB_PATH_TEMPLATE='{folder}/pages/{filename}'
+
 python load_from_folders.py --ddl
+
+# Then in app .env:
+# DATA_MODE=postgres
 ```
 
 ## Not loaded yet

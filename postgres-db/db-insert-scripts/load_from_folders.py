@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """Load chart folders + metadata + OCR into Postgres (abridged schema).
 
-Loads for now:
-  - chart_list / page_list   (from data/folders/<chart>/pages)
-  - manifest_member_list     (from a single metadata CSV — B1_R1_DummyMetadata format)
-  - ocr_results              (from ocr/*_prelim / *_final1 / *_final2)
+db-insert writes:
+  - chart_list / page_list   ← data/folders/<chart>/pages (+ BLOB_CONTAINER / path)
+  - manifest_member_list     ← stacked metadata_R{n}_B{n}.csv files (one below the other)
+  - ocr_results              ← ocr/*_prelim / *_final1 / *_final2
 
-Other result tables (quality, DOS, …) are deferred until formats are provided.
+Frontend later reads these tables (DATA_MODE=postgres).
 
 Usage:
   export DATABASE_URL=postgresql://user:pass@localhost:5432/imaging
-  # optional: DATA_ROOT=/path/to/data/folders
   python load_from_folders.py --ddl
-  python load_from_folders.py --metadata-csv ../metadata/B1_R1_DummyMetadata.csv
+  python load_from_folders.py --metadata-dir ../metadata
 """
 
 from __future__ import annotations
@@ -35,10 +34,13 @@ except ImportError:
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATA_ROOT = Path(os.environ.get("DATA_ROOT", ROOT / "data" / "folders"))
 DDL_PATH = Path(__file__).resolve().parents[1] / "ddl-scripts" / "001_schema.sql"
+DEFAULT_METADATA_DIR = Path(__file__).resolve().parents[1] / "metadata"
 
 IMAGE_RE = re.compile(r"\.(jpe?g|png|webp|tif{1,2})$", re.IGNORECASE)
 PAGE_NUM_RE = re.compile(r"^(\d+)\.(jpe?g|png|webp|tif{1,2})$", re.IGNORECASE)
 OCR_MARKER_RE = re.compile(r"^=====\s*(.+?)\s*=====\s*$", re.MULTILINE)
+# metadata_R1_B1.csv, metadata_R2_B3.csv, …
+METADATA_FILE_RE = re.compile(r"^metadata_R(\d+)_B(\d+)\.csv$", re.IGNORECASE)
 
 # UI / file suffix → ocr_results.ocr_type
 OCR_FILE_MAP: list[tuple[str, str, tuple[str, ...]]] = [
@@ -152,6 +154,44 @@ def read_metadata_rows(path: Path) -> list[dict[str, str]]:
                 continue
             rows.append(norm)
         return rows
+
+
+def discover_metadata_csvs(metadata_dir: Path) -> list[Path]:
+    """Find metadata_R{n}_B{n}.csv files, sorted by R then B (stack order)."""
+    found: list[tuple[int, int, Path]] = []
+    for path in metadata_dir.iterdir():
+        if not path.is_file() or path.name.startswith("._"):
+            continue
+        m = METADATA_FILE_RE.match(path.name)
+        if not m:
+            continue
+        found.append((int(m.group(1)), int(m.group(2)), path))
+    found.sort(key=lambda t: (t[0], t[1], t[2].name))
+    return [p for _, _, p in found]
+
+
+def load_stacked_metadata_rows(
+    metadata_dir: Path | None = None,
+    metadata_csv: Path | None = None,
+) -> tuple[list[dict[str, str]], list[Path]]:
+    """
+    Load metadata rows stacked one below the other from metadata_Rn_Bn CSVs
+    (or a single --metadata-csv override). Writes later go to manifest_member_list.
+    """
+    sources: list[Path] = []
+    if metadata_csv is not None:
+        sources = [metadata_csv]
+    elif metadata_dir is not None:
+        sources = discover_metadata_csvs(metadata_dir)
+    if not sources:
+        return [], []
+
+    stacked: list[dict[str, str]] = []
+    for path in sources:
+        rows = read_metadata_rows(path)
+        print(f"  metadata {path.name}: {len(rows)} rows")
+        stacked.extend(rows)
+    return stacked, sources
 
 
 def apply_ddl(conn: psycopg.Connection, ddl_path: Path) -> None:
@@ -327,9 +367,12 @@ def load_ocr_for_chart(
 
 def chart_blob_path(path_template: str, folder_name: str) -> str:
     """Resolve chart_list.path from BLOB_PATH_TEMPLATE (folder name = chart)."""
+    tmpl = (path_template or "{folder}").strip()
+    if "{folder}" not in tmpl and "{filename}" not in tmpl:
+        base = tmpl.rstrip("/")
+        return f"{base}/{folder_name}" if base else folder_name
     path = (
-        (path_template or "{folder}")
-        .replace("{folder}", folder_name)
+        tmpl.replace("{folder}", folder_name)
         .replace("{filename}", "")
         .replace("{page}", "")
     )
@@ -339,16 +382,17 @@ def chart_blob_path(path_template: str, folder_name: str) -> str:
 def load_folders(
     conn: psycopg.Connection,
     data_root: Path,
-    metadata_csv: Path,
+    metadata_rows: list[dict[str, str]],
     container_name: str,
     path_template: str,
 ) -> None:
+    """Write chart_list, page_list, manifest_member_list, ocr_results to Postgres."""
     by_record: dict[str, list[dict[str, str]]] = {}
-    for row in read_metadata_rows(metadata_csv):
+    for row in metadata_rows:
         by_record.setdefault(row["recordId"], []).append(row)
     print(
-        f"Metadata: {sum(len(v) for v in by_record.values())} rows, "
-        f"{len(by_record)} recordIds from {metadata_csv}"
+        f"Metadata stacked → {len(metadata_rows)} rows, "
+        f"{len(by_record)} recordIds → manifest_member_list"
     )
 
     folders = sorted(
@@ -399,7 +443,9 @@ def load_folders(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Load folders + metadata + OCR into Postgres")
+    parser = argparse.ArgumentParser(
+        description="db-insert: write charts, pages, metadata_Rn_Bn → manifest, OCR to Postgres"
+    )
     parser.add_argument(
         "--database-url",
         default=os.environ.get("DATABASE_URL", ""),
@@ -416,12 +462,17 @@ def main() -> None:
         action="store_true",
         help="Apply ddl-scripts/001_schema.sql before load",
     )
-    default_metadata = Path(__file__).resolve().parents[1] / "metadata" / "B1_R1_DummyMetadata.csv"
+    parser.add_argument(
+        "--metadata-dir",
+        type=Path,
+        default=DEFAULT_METADATA_DIR,
+        help="Directory of metadata_R{n}_B{n}.csv files (stacked). Default: postgres-db/metadata",
+    )
     parser.add_argument(
         "--metadata-csv",
         type=Path,
-        default=default_metadata,
-        help="Single metadata CSV (B1_R1_DummyMetadata format)",
+        default=None,
+        help="Optional single CSV override (skips directory stack)",
     )
     parser.add_argument(
         "--container-name",
@@ -444,26 +495,40 @@ def main() -> None:
         print(f"DATA_ROOT not found: {data_root}", file=sys.stderr)
         sys.exit(1)
 
-    metadata_csv = args.metadata_csv.resolve()
-    if not metadata_csv.is_file():
+    metadata_dir = args.metadata_dir.resolve() if args.metadata_dir else None
+    metadata_csv = args.metadata_csv.resolve() if args.metadata_csv else None
+    if metadata_csv and not metadata_csv.is_file():
         print(f"Metadata CSV not found: {metadata_csv}", file=sys.stderr)
         sys.exit(1)
+    if metadata_csv is None and (metadata_dir is None or not metadata_dir.is_dir()):
+        print(f"Metadata dir not found: {metadata_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    print("Loading stacked metadata_Rn_Bn CSVs…")
+    metadata_rows, sources = load_stacked_metadata_rows(metadata_dir, metadata_csv)
+    if not sources:
+        print(
+            f"No metadata_R*_B*.csv files in {metadata_dir}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    print(f"Stacked {len(sources)} file(s) → {len(metadata_rows)} total rows (write to DB)")
 
     with psycopg.connect(args.database_url) as conn:
         if args.ddl:
             apply_ddl(conn, DDL_PATH)
-        print(f"Loading from {data_root}")
+        print(f"Loading folders from {data_root}")
         if args.container_name:
             print(f"BLOB_CONTAINER={args.container_name}")
         print(f"BLOB_PATH_TEMPLATE={args.path_template}")
         load_folders(
             conn,
             data_root,
-            metadata_csv,
+            metadata_rows,
             args.container_name,
             args.path_template,
         )
-        print("Done.")
+        print("Done — chart_list, page_list, manifest_member_list, ocr_results written.")
 
 
 if __name__ == "__main__":

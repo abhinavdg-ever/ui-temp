@@ -16,6 +16,9 @@ class Settings(BaseSettings):
 
     data_mode: Literal["local", "postgres"] = "local"
     data_root: str = "./data/folders"
+    # Local mode: stacked metadata_R{n}_B{n}.csv for Manifest Details
+    # Postgres mode: manifest_member_list is read from the database instead
+    metadata_root: str = "./postgres-db/metadata"
     database_url: str = "postgresql+psycopg://user:password@localhost:5432/advantmed_imaging"
     api_host: str = "127.0.0.1"
     api_port: int = 8002
@@ -42,6 +45,13 @@ class Settings(BaseSettings):
     @property
     def resolved_data_root(self) -> Path:
         path = Path(self.data_root)
+        if not path.is_absolute():
+            path = (ROOT_DIR / path).resolve()
+        return path
+
+    @property
+    def resolved_metadata_root(self) -> Path:
+        path = Path(self.metadata_root)
         if not path.is_absolute():
             path = (ROOT_DIR / path).resolve()
         return path

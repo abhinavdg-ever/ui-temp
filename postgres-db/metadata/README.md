@@ -1,34 +1,37 @@
-# Metadata format (B1_R1_DummyMetadata)
+# Metadata CSVs → Manifest Details
 
-Single CSV file — do **not** split per folder.
+## DATA_MODE behavior
 
-Columns (Excel sheet `B1_R1_DummyMetadata`):
+| Mode | Manifest source |
+|------|-----------------|
+| `local` | Stacked files in this folder (`metadata_R{n}_B{n}.csv`) |
+| `postgres` | `manifest_member_list` in Postgres (populated by db-insert) |
+
+## File naming
+
+```
+metadata_R{n}_B{n}.csv
+```
+
+Examples: `metadata_R1_B1.csv`, `metadata_R2_B1.csv`
+
+Multiple files are stacked (sorted by R, then B). Frontend local mode matches `recordId` → folder name.
+
+## Columns
 
 | Column | Description |
 |--------|-------------|
-| `recordId` | Chart / folder id → `chart_list.chart_name` |
+| `recordId` | Chart / folder id |
 | `DummyFirstName` | Member first name |
 | `DummyLastName` | Member last name |
-| `DummyDOB` | Date of birth `MM/DD/YYYY` |
-| `MemberID` | External member id → `manifest_member_list.external_member_id` |
+| `DummyDOB` | `MM/DD/YYYY` |
+| `MemberID` | External member id |
 
-## File
-
-`postgres-db/metadata/B1_R1_DummyMetadata.csv`
-
-Load with:
+## db-insert (writes to Postgres)
 
 ```bash
-python load_from_folders.py --metadata-csv ../metadata/B1_R1_DummyMetadata.csv
+python load_from_folders.py --ddl
+# stacks metadata_R*_B*.csv → INSERT manifest_member_list
 ```
 
-(Default path is this file if `--metadata-csv` is omitted.)
-
-## DB mapping
-
-| CSV | `manifest_member_list` |
-|-----|------------------------|
-| `DummyFirstName` + `DummyLastName` | `member_name` (`First Last`) |
-| `DummyDOB` | `member_dob` |
-| `MemberID` | `external_member_id` |
-| `recordId` | resolves `chart_id` via `chart_list.chart_name` |
+Then set `DATA_MODE=postgres` so the UI reads Manifest Details from the DB.

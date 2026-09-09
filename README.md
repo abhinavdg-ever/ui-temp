@@ -178,10 +178,11 @@ See root `.env`:
 
 | Variable | Description |
 |----------|-------------|
-| `DATA_MODE` | `local` or `postgres` |
-| `DATA_ROOT` | Path to folders root (local mode; Docker uses `/data/folders`) |
+| `DATA_MODE` | `local` (CSV metadata + file OCR) or `postgres` (manifest + OCR from DB) |
+| `DATA_ROOT` | Path to folders root (page images; Docker uses `/data/folders`) |
+| `METADATA_ROOT` | Stacked `metadata_R*_B*.csv` for Manifest Details when `DATA_MODE=local` |
 | `DATA_HOST_PATH` | Host path mounted into Docker backend (default `./data/folders`) |
-| `DATABASE_URL` | Postgres URL (postgres mode — not implemented yet) |
+| `DATABASE_URL` | Postgres URL (`DATA_MODE=postgres` reads `manifest_member_list` + `ocr_results`) |
 | `ALLOWED_ORIGINS` | CORS origins for direct API access |
 | `FILE_VIEWER_BLOB_ENABLED` | Show Local / Blob toggle in File Viewer |
 | `BLOB_AUTH_MODE` | `entra` (default, Shared Key off OK) or legacy `sas` |

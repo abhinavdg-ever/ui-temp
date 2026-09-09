@@ -25,13 +25,28 @@ def build_blob_key(
     filename: str,
     page_number: int,
 ) -> str:
-    return (
-        (template or "{folder}/pages/{filename}")
-        .replace("{folder}", folder_id)
-        .replace("{filename}", filename)
-        .replace("{page}", str(page_number))
-        .lstrip("/")
-    )
+    tmpl = (template or "{folder}/pages/{filename}").strip()
+    if "{folder}" not in tmpl and "{filename}" not in tmpl:
+        # Prefix-only (e.g. Raw_Input/Run1/Batch1/DEID_PNGs/) → append folder/file
+        base = tmpl.rstrip("/")
+        key = f"{base}/{folder_id}/{filename}" if base else f"{folder_id}/{filename}"
+    else:
+        key = (
+            tmpl.replace("{folder}", folder_id)
+            .replace("{filename}", filename)
+            .replace("{page}", str(page_number))
+        )
+    return key.lstrip("/")
+
+
+def _normalize_account_url(raw: str) -> str:
+    """Accept full URL or bare account name (azsadve2aipoc)."""
+    value = raw.strip().rstrip("/")
+    if not value:
+        return ""
+    if value.startswith("http://") or value.startswith("https://"):
+        return value
+    return f"https://{value}.blob.core.windows.net"
 
 
 def _credential(settings: Settings):
@@ -51,7 +66,7 @@ def _credential(settings: Settings):
 @lru_cache
 def _blob_service_client() -> BlobServiceClient:
     settings = get_settings()
-    account_url = settings.blob_account_url.strip().rstrip("/")
+    account_url = _normalize_account_url(settings.blob_account_url)
     if not account_url:
         raise RuntimeError("BLOB_ACCOUNT_URL is not configured")
     return BlobServiceClient(account_url=account_url, credential=_credential(settings))

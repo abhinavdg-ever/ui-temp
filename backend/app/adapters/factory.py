@@ -14,5 +14,11 @@ def get_repository() -> FolderRepository:
 
 def build_repository(settings: Settings) -> FolderRepository:
     if settings.data_mode == "postgres":
-        return PostgresFolderRepository(settings.database_url)
-    return LocalFolderRepository(settings.resolved_data_root)
+        return PostgresFolderRepository(
+            settings.database_url,
+            data_root=settings.resolved_data_root,
+        )
+    return LocalFolderRepository(
+        settings.resolved_data_root,
+        metadata_root=settings.resolved_metadata_root,
+    )

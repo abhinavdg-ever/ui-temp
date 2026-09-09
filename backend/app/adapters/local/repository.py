@@ -20,6 +20,7 @@ from app.core.schemas import (
     OcrTextResponse,
     PageSummary,
 )
+from app.services.metadata_csv import manifest_for_record
 
 PAGE_RE = re.compile(r"^page_(\d+)\.(jpe?g|png|webp|tif{1,2})$", re.IGNORECASE)
 PLAIN_NUM_RE = re.compile(r"^(\d+)\.(jpe?g|png|webp|tif{1,2})$", re.IGNORECASE)
@@ -127,10 +128,14 @@ class LocalFolderRepository(FolderRepository):
       ocr/<folder_name>_final1.txt    # Final (OSS)
       ocr/<folder_name>_final2.json   # Final (AzDocInt) — JSON with pages[].content
       # text OCR sections: ===== 1.jpg =====
+
+    Manifest Details (DATA_MODE=local): stacked metadata_R{n}_B{n}.csv under metadata_root
+    (default postgres-db/metadata). Postgres mode reads manifest_member_list from DB instead.
     """
 
-    def __init__(self, data_root: Path):
+    def __init__(self, data_root: Path, metadata_root: Path | None = None):
         self.data_root = data_root
+        self.metadata_root = metadata_root
 
     def _folder_dir(self, folder_id: str) -> Path:
         if "/" in folder_id or "\\" in folder_id or folder_id in (".", ".."):
@@ -182,22 +187,31 @@ class LocalFolderRepository(FolderRepository):
 
     def _dummy_manifest(self) -> ImagingManifestDetails:
         return ImagingManifestDetails(
-            member="Gonzalez Stephen",
-            dob="09/03/1942",
-            memberId="MEM-53688890",
+            member=None,
+            dob=None,
+            memberId=None,
         )
+
+    def _manifest_for_folder(self, folder_id: str) -> ImagingManifestDetails:
+        """DATA_MODE=local: read from postgres-db/metadata metadata_Rn_Bn CSVs."""
+        if self.metadata_root is not None:
+            found = manifest_for_record(self.metadata_root, folder_id)
+            if found is not None:
+                return found
+        return self._dummy_manifest()
 
     def _dummy_imaging_pages(self, folder_dir: Path, pages: list[tuple[int, Path]]) -> list[ImagingPageResult]:
         """Backup/dummy imaging rows until Postgres schema is wired."""
+        manifest = self._manifest_for_folder(folder_dir.name)
         results: list[ImagingPageResult] = []
         for idx, (num, path) in enumerate(pages):
             results.append(
                 ImagingPageResult(
                     pageNumber=num,
                     fileName=path.name,
-                    memberName="Gonzalez Stephen" if idx == 0 else f"Member {num}",
-                    memberDob="09/03/1942",
-                    memberId="MEM-53688890",
+                    memberName=manifest.member if idx == 0 else (manifest.member or f"Member {num}"),
+                    memberDob=manifest.dob,
+                    memberId=manifest.memberId,
                     memberConfidence=round(0.92 - (idx * 0.02), 2),
                     handwrittenOrPrinted="Printed" if idx % 2 == 0 else "Handwritten",
                     orientationAngle=round(0.5 + idx * 0.15, 2),
@@ -212,16 +226,19 @@ class LocalFolderRepository(FolderRepository):
             )
         return results
 
-    def _parse_imaging_manifest(self, data: Any) -> ImagingManifestDetails:
-        if not isinstance(data, dict):
-            return self._dummy_manifest()
-        raw = data.get("manifest")
-        if isinstance(raw, dict):
-            try:
-                return ImagingManifestDetails.model_validate(raw)
-            except Exception:
-                pass
-        return self._dummy_manifest()
+    def _parse_imaging_manifest(self, data: Any, folder_id: str) -> ImagingManifestDetails:
+        # Prefer CSV metadata (local mode); fall back to JSON embedded manifest, then empty
+        from_csv = self._manifest_for_folder(folder_id)
+        if from_csv.member or from_csv.dob or from_csv.memberId:
+            return from_csv
+        if isinstance(data, dict):
+            raw = data.get("manifest")
+            if isinstance(raw, dict):
+                try:
+                    return ImagingManifestDetails.model_validate(raw)
+                except Exception:
+                    pass
+        return from_csv
 
     def _parse_imaging_pages(self, data: Any, folder_dir: Path) -> list[ImagingPageResult]:
         raw_pages = data.get("pages") if isinstance(data, dict) else data
@@ -421,13 +438,13 @@ class LocalFolderRepository(FolderRepository):
                 ) from exc
             return ImagingDocumentResponse(
                 folder_id=folder_id,
-                manifest=self._parse_imaging_manifest(data),
+                manifest=self._parse_imaging_manifest(data, folder_id),
                 pages=self._parse_imaging_pages(data, folder_dir),
             )
 
         # Backup: always return dummy values so Imaging UI works before Postgres
         return ImagingDocumentResponse(
             folder_id=folder_id,
-            manifest=self._dummy_manifest(),
+            manifest=self._manifest_for_folder(folder_id),
             pages=self._dummy_imaging_pages(folder_dir, pages),
         )

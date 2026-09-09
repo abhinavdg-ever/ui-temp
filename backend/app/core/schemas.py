@@ -66,7 +66,11 @@ class ImagingPageResult(BaseModel):
 
 
 class ImagingManifestDetails(BaseModel):
-    """Expected manifest identity for the chart (dummy until Postgres)."""
+    """Expected manifest identity for the chart.
+
+    DATA_MODE=local → postgres-db/metadata/metadata_R*_B*.csv
+    DATA_MODE=postgres → manifest_member_list
+    """
 
     member: str | None = None
     dob: str | None = None
