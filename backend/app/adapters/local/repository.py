@@ -9,7 +9,17 @@ from typing import Any
 from fastapi import HTTPException
 
 from app.adapters.base import FolderRepository
-from app.core.schemas import FolderDetail, FolderSummary, OcrKind, OcrRunStatus, OcrTextResponse, PageSummary
+from app.core.schemas import (
+    FolderDetail,
+    FolderSummary,
+    ImagingDocumentResponse,
+    ImagingManifestDetails,
+    ImagingPageResult,
+    OcrKind,
+    OcrRunStatus,
+    OcrTextResponse,
+    PageSummary,
+)
 
 PAGE_RE = re.compile(r"^page_(\d+)\.(jpe?g|png|webp|tif{1,2})$", re.IGNORECASE)
 PLAIN_NUM_RE = re.compile(r"^(\d+)\.(jpe?g|png|webp|tif{1,2})$", re.IGNORECASE)
@@ -154,6 +164,81 @@ class LocalFolderRepository(FolderRepository):
         except OSError:
             return False
 
+    def _imaging_path(self, folder_dir: Path) -> Path:
+        return folder_dir / "imaging" / f"{folder_dir.name}_imaging.json"
+
+    def _has_imaging(self, folder_dir: Path) -> bool:
+        path = self._imaging_path(folder_dir)
+        try:
+            return path.is_file() and path.stat().st_size > 0
+        except OSError:
+            return False
+
+    def _imaging_processed_count(self, folder_dir: Path, page_count: int) -> int:
+        """Until Postgres is wired, imaging is always available as dummy when pages exist."""
+        if page_count == 0:
+            return 0
+        return page_count
+
+    def _dummy_manifest(self) -> ImagingManifestDetails:
+        return ImagingManifestDetails(
+            member="Gonzalez Stephen",
+            dob="09/03/1942",
+            memberId="MEM-53688890",
+        )
+
+    def _dummy_imaging_pages(self, folder_dir: Path, pages: list[tuple[int, Path]]) -> list[ImagingPageResult]:
+        """Backup/dummy imaging rows until Postgres schema is wired."""
+        results: list[ImagingPageResult] = []
+        for idx, (num, path) in enumerate(pages):
+            results.append(
+                ImagingPageResult(
+                    pageNumber=num,
+                    fileName=path.name,
+                    memberName="Gonzalez Stephen" if idx == 0 else f"Member {num}",
+                    memberDob="09/03/1942",
+                    memberId="MEM-53688890",
+                    memberConfidence=round(0.92 - (idx * 0.02), 2),
+                    handwrittenOrPrinted="Printed" if idx % 2 == 0 else "Handwritten",
+                    orientationAngle=round(0.5 + idx * 0.15, 2),
+                    tiltAngle=round(0.8 + idx * 0.1, 2),
+                    mirrored=False,
+                    pageQualityConfidence=round(0.94 - idx * 0.02, 2),
+                    dos="01/03/2024" if idx % 2 == 0 else "01/04/2024",
+                    dosConfidence=round(0.9 - idx * 0.03, 2),
+                    pageType="Daily Note" if idx % 2 == 0 else "Progress Note",
+                    pageTypeConfidence=round(0.88 - idx * 0.02, 2),
+                )
+            )
+        return results
+
+    def _parse_imaging_manifest(self, data: Any) -> ImagingManifestDetails:
+        if not isinstance(data, dict):
+            return self._dummy_manifest()
+        raw = data.get("manifest")
+        if isinstance(raw, dict):
+            try:
+                return ImagingManifestDetails.model_validate(raw)
+            except Exception:
+                pass
+        return self._dummy_manifest()
+
+    def _parse_imaging_pages(self, data: Any, folder_dir: Path) -> list[ImagingPageResult]:
+        raw_pages = data.get("pages") if isinstance(data, dict) else data
+        if not isinstance(raw_pages, list):
+            return []
+        parsed: list[ImagingPageResult] = []
+        for item in raw_pages:
+            if not isinstance(item, dict):
+                continue
+            try:
+                parsed.append(ImagingPageResult.model_validate(item))
+            except Exception:
+                continue
+        if parsed:
+            return parsed
+        return self._dummy_imaging_pages(folder_dir, self._page_files(folder_dir))
+
     def _page_files(self, folder_dir: Path) -> list[tuple[int, Path]]:
         """Collect page images from pages/ (preferred) or folder root as fallback.
 
@@ -222,6 +307,9 @@ class LocalFolderRepository(FolderRepository):
             ocr = self._ocr_path(folder_dir, kind)
             if ocr.is_file():
                 paths.append(ocr)
+        imaging = self._imaging_path(folder_dir)
+        if imaging.is_file():
+            paths.append(imaging)
         status_file = folder_dir / "ocr" / "ocr_run_status.txt"
         if status_file.is_file():
             paths.append(status_file)
@@ -243,7 +331,7 @@ class LocalFolderRepository(FolderRepository):
                     name=entry.name,
                     page_count=page_count,
                     ocr_processed=self._ocr_processed_count(entry, page_count),
-                    imaging_processed=0,
+                    imaging_processed=self._imaging_processed_count(entry, page_count),
                     ocr_status=self._ocr_status(entry),
                     last_updated_at=_latest_mtime(self._touch_paths(entry, pages)),
                 )
@@ -260,6 +348,7 @@ class LocalFolderRepository(FolderRepository):
         has_prelim = self._has_ocr(folder_dir, "preliminary")
         has_final1 = self._has_ocr(folder_dir, "final1")
         has_final2 = self._has_ocr(folder_dir, "final2")
+        has_imaging = True  # dummy imaging always available pre-Postgres
         page_summaries = [
             PageSummary(
                 page_number=num,
@@ -268,6 +357,7 @@ class LocalFolderRepository(FolderRepository):
                 has_preliminary_ocr=has_prelim,
                 has_final1_ocr=has_final1,
                 has_final2_ocr=has_final2,
+                has_imaging=has_imaging and len(pages) > 0,
             )
             for num, path in pages
         ]
@@ -276,7 +366,7 @@ class LocalFolderRepository(FolderRepository):
             name=folder_dir.name,
             page_count=len(pages),
             ocr_processed=self._ocr_processed_count(folder_dir, len(pages)),
-            imaging_processed=0,
+            imaging_processed=self._imaging_processed_count(folder_dir, len(pages)),
             ocr_status=self._ocr_status(folder_dir),
             last_updated_at=_latest_mtime(self._touch_paths(folder_dir, pages)),
             pages=page_summaries,
@@ -314,3 +404,30 @@ class LocalFolderRepository(FolderRepository):
             text = raw
 
         return OcrTextResponse(folder_id=folder_id, kind=normalized, text=text)
+
+    def get_imaging(self, folder_id: str) -> ImagingDocumentResponse:
+        """Load imaging JSON, or synthesize dummy page rows if missing (pre-Postgres)."""
+        folder_dir = self._folder_dir(folder_id)
+        pages = self._page_files(folder_dir)
+        path = self._imaging_path(folder_dir)
+
+        if path.is_file():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+            except json.JSONDecodeError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Invalid imaging JSON in {path.name}: {exc}",
+                ) from exc
+            return ImagingDocumentResponse(
+                folder_id=folder_id,
+                manifest=self._parse_imaging_manifest(data),
+                pages=self._parse_imaging_pages(data, folder_dir),
+            )
+
+        # Backup: always return dummy values so Imaging UI works before Postgres
+        return ImagingDocumentResponse(
+            folder_id=folder_id,
+            manifest=self._dummy_manifest(),
+            pages=self._dummy_imaging_pages(folder_dir, pages),
+        )

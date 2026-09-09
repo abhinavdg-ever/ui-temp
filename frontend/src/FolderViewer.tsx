@@ -8,28 +8,35 @@ import {
   FileText,
   Maximize2,
   Minimize2,
+  PanelLeftClose,
+  PanelLeftOpen,
   ScanSearch,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
 import {
   getFolder,
+  getFolderImaging,
   getFolderOcr,
   OCR_TAB_LABELS,
   pageImageUrl,
   type FolderDetail,
+  type ImagingDocumentResponse,
+  type ImagingPageResult,
   type OcrKind,
+  type OutputMode,
 } from "./api";
+import ImagingPanel, { type ImagingTab } from "./ImagingPanel";
 import { ocrTextForFilename } from "./ocrPages";
 import FullscreenPageChrome from "./FullscreenPageChrome";
 import { usePageViewerHotkeys } from "./usePageViewerHotkeys";
 
 type Props = {
   folderId: string;
+  initialMode?: OutputMode;
   onBack: () => void;
+  onModeChange?: (mode: OutputMode) => void;
 };
-
-type OutputMode = "ocr" | "imaging";
 
 const OCR_TABS: OcrKind[] = ["preliminary", "final1", "final2"];
 const ZOOM_MIN = 0.5;
@@ -42,14 +49,18 @@ const KIND_FILE_SUFFIX: Record<OcrKind, string> = {
   final2: "final2",
 };
 
-function downloadTextFile(filename: string, text: string) {
-  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+function downloadTextFile(filename: string, text: string, mime = "text/plain;charset=utf-8") {
+  const blob = new Blob([text], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function downloadJsonFile(filename: string, data: unknown) {
+  downloadTextFile(filename, JSON.stringify(data, null, 2), "application/json;charset=utf-8");
 }
 
 function isUsableOcrText(text: string): boolean {
@@ -60,27 +71,54 @@ function isUsableOcrText(text: string): boolean {
   return true;
 }
 
-export default function FolderViewer({ folderId, onBack }: Props) {
+function findImagingPage(
+  doc: ImagingDocumentResponse | null,
+  page: { page_number: number; filename: string } | null,
+): ImagingPageResult | null {
+  if (!doc || !page) return null;
+  const byFile = doc.pages.find(
+    (p) => p.fileName.toLowerCase() === page.filename.toLowerCase(),
+  );
+  if (byFile) return byFile;
+  return doc.pages.find((p) => p.pageNumber === page.page_number) ?? null;
+}
+
+export default function FolderViewer({
+  folderId,
+  initialMode = "ocr",
+  onBack,
+  onModeChange,
+}: Props) {
   const [folder, setFolder] = useState<FolderDetail | null>(null);
   const [pageIndex, setPageIndex] = useState(0);
-  const [outputMode, setOutputMode] = useState<OutputMode>("ocr");
+  const [outputMode, setOutputMode] = useState<OutputMode>(initialMode);
   const [ocrTab, setOcrTab] = useState<OcrKind>("preliminary");
+  const [imagingTab, setImagingTab] = useState<ImagingTab>("page");
   const [ocrFullText, setOcrFullText] = useState("");
+  const [imagingDoc, setImagingDoc] = useState<ImagingDocumentResponse | null>(null);
   const [loadingFolder, setLoadingFolder] = useState(true);
   const [loadingOcr, setLoadingOcr] = useState(false);
+  const [loadingImaging, setLoadingImaging] = useState(false);
+  const [imagingError, setImagingError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [outputExpanded, setOutputExpanded] = useState(false);
   const pageStageRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setOutputMode(initialMode);
+  }, [initialMode]);
 
   useEffect(() => {
     let cancelled = false;
     setLoadingFolder(true);
     setError(null);
     setPageIndex(0);
-    setOutputMode("ocr");
     setOcrTab("preliminary");
+    setImagingTab("page");
+    setImagingDoc(null);
     setZoom(1);
     getFolder(folderId)
       .then((data) => {
@@ -139,6 +177,33 @@ export default function FolderViewer({ folderId, onBack }: Props) {
     };
   }, [folder, ocrTab, outputMode]);
 
+  useEffect(() => {
+    if (!folder || outputMode !== "imaging") {
+      return;
+    }
+    let cancelled = false;
+    setLoadingImaging(true);
+    setImagingError(null);
+    getFolderImaging(folder.id)
+      .then((data) => {
+        if (!cancelled) setImagingDoc(data);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setImagingDoc(null);
+          setImagingError(
+            err instanceof Error ? err.message : "Failed to load imaging results",
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingImaging(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [folder, outputMode]);
+
   const pageOcrText = useMemo(() => {
     if (!ocrFullText || !page) return "";
     if (ocrFullText.startsWith("No ") || ocrFullText === "OCR unavailable") {
@@ -148,10 +213,20 @@ export default function FolderViewer({ folderId, onBack }: Props) {
     return chunk || `No OCR text found for ${page.filename}.`;
   }, [ocrFullText, page]);
 
+  const imagingPage = useMemo(
+    () => findImagingPage(imagingDoc, page),
+    [imagingDoc, page],
+  );
+
   const canUseFull = isUsableOcrText(ocrFullText);
   const pageCount = folder?.pages.length ?? 0;
   const folderName = folder?.name ?? folderId;
   const suffix = KIND_FILE_SUFFIX[ocrTab];
+
+  function changeMode(mode: OutputMode) {
+    setOutputMode(mode);
+    onModeChange?.(mode);
+  }
 
   function downloadFullOcr() {
     if (!canUseFull) return;
@@ -167,6 +242,70 @@ export default function FolderViewer({ folderId, onBack }: Props) {
     } catch {
       setCopied(false);
     }
+  }
+
+  function downloadImagingDocJson() {
+    if (!imagingDoc) return;
+    downloadJsonFile(`${folderName}_imaging.json`, imagingDoc);
+  }
+
+  function downloadImagingDocCsv() {
+    if (!imagingDoc) return;
+    const headers = [
+      "pageNumber",
+      "fileName",
+      "memberName",
+      "memberDob",
+      "memberId",
+      "memberConfidence",
+      "handwrittenOrPrinted",
+      "orientationAngle",
+      "tiltAngle",
+      "mirrored",
+      "pageQualityConfidence",
+      "dos",
+      "dosConfidence",
+      "pageType",
+      "pageTypeConfidence",
+      "manifestMember",
+      "manifestDob",
+      "manifestMemberId",
+    ];
+    const esc = (v: unknown) => {
+      const s = v === null || v === undefined ? "" : String(v);
+      if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    };
+    const m = imagingDoc.manifest;
+    const rows = imagingDoc.pages.map((p) =>
+      [
+        p.pageNumber,
+        p.fileName,
+        p.memberName,
+        p.memberDob,
+        p.memberId,
+        p.memberConfidence,
+        p.handwrittenOrPrinted,
+        p.orientationAngle,
+        p.tiltAngle,
+        p.mirrored,
+        p.pageQualityConfidence,
+        p.dos,
+        p.dosConfidence,
+        p.pageType,
+        p.pageTypeConfidence,
+        m?.member ?? "",
+        m?.dob ?? "",
+        m?.memberId ?? "",
+      ]
+        .map(esc)
+        .join(","),
+    );
+    downloadTextFile(
+      `${folderName}_imaging.csv`,
+      [headers.join(","), ...rows].join("\n"),
+      "text/csv;charset=utf-8",
+    );
   }
 
   function zoomBy(delta: number) {
@@ -226,7 +365,7 @@ export default function FolderViewer({ folderId, onBack }: Props) {
           <button
             type="button"
             className={`mode-icon-btn${outputMode === "ocr" ? " active" : ""}`}
-            onClick={() => setOutputMode("ocr")}
+            onClick={() => changeMode("ocr")}
             title="OCR"
             aria-label="OCR output"
             aria-pressed={outputMode === "ocr"}
@@ -236,10 +375,11 @@ export default function FolderViewer({ folderId, onBack }: Props) {
           </button>
           <button
             type="button"
-            className="mode-icon-btn"
-            disabled
-            title="Imaging (coming soon)"
-            aria-label="Imaging output (disabled)"
+            className={`mode-icon-btn${outputMode === "imaging" ? " active" : ""}`}
+            onClick={() => changeMode("imaging")}
+            title="Imaging"
+            aria-label="Imaging output"
+            aria-pressed={outputMode === "imaging"}
           >
             <ScanSearch size={18} aria-hidden="true" />
             <span>Imaging</span>
@@ -250,7 +390,8 @@ export default function FolderViewer({ folderId, onBack }: Props) {
       {error && <div className="error-banner">{error}</div>}
 
       {!error && (
-        <div className="review-split">
+        <div className={`review-split${outputExpanded ? " output-expanded" : ""}`}>
+          {!outputExpanded && (
           <section className="pane" aria-label="Page viewer">
             <div className="pane-header">
               <h2>Page{page ? ` · ${page.filename}` : ""}</h2>
@@ -378,13 +519,36 @@ export default function FolderViewer({ folderId, onBack }: Props) {
               </div>
             )}
           </section>
+          )}
 
           <section className="pane" aria-label="Output panel">
             <div className="pane-header pane-header-wrap">
               <div className="pane-header-main">
+                <button
+                  type="button"
+                  className="pane-expand-btn"
+                  onClick={() => setOutputExpanded((v) => !v)}
+                  title={
+                    outputExpanded
+                      ? "Show page viewer"
+                      : "Expand output to full width"
+                  }
+                  aria-label={
+                    outputExpanded
+                      ? "Show page viewer"
+                      : "Expand output to full width"
+                  }
+                  aria-pressed={outputExpanded}
+                >
+                  {outputExpanded ? (
+                    <PanelLeftOpen size={16} aria-hidden="true" />
+                  ) : (
+                    <PanelLeftClose size={16} aria-hidden="true" />
+                  )}
+                </button>
                 <h2>
                   {outputMode === "ocr" ? "OCR Output" : "Imaging Output"}
-                  {page ? (
+                  {page && outputMode === "ocr" ? (
                     <span className="ocr-page-label"> · {page.filename}</span>
                   ) : null}
                 </h2>
@@ -405,10 +569,39 @@ export default function FolderViewer({ folderId, onBack }: Props) {
                   ))}
                 </div>
               )}
+              {outputMode === "imaging" && (
+                <div className="output-tabs" role="tablist" aria-label="Imaging views">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={imagingTab === "page"}
+                    className={imagingTab === "page" ? "active" : ""}
+                    onClick={() => setImagingTab("page")}
+                  >
+                    Page Details
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={imagingTab === "doc"}
+                    className={imagingTab === "doc" ? "active" : ""}
+                    onClick={() => setImagingTab("doc")}
+                  >
+                    Doc Summary
+                  </button>
+                </div>
+              )}
             </div>
             <div className="ocr-panel" role="tabpanel">
               {outputMode === "imaging" ? (
-                <div className="ocr-empty">Imaging output is not available yet.</div>
+                <ImagingPanel
+                  tab={imagingTab}
+                  loading={loadingImaging}
+                  error={imagingError}
+                  document={imagingDoc}
+                  currentPage={imagingPage}
+                  currentFileName={page?.filename ?? null}
+                />
               ) : loadingOcr ? (
                 <div className="ocr-loading">Loading OCR output…</div>
               ) : (
@@ -436,6 +629,30 @@ export default function FolderViewer({ folderId, onBack }: Props) {
                 >
                   <Download size={14} aria-hidden="true" />
                   Download
+                </button>
+              </div>
+            )}
+            {outputMode === "imaging" && (
+              <div className="ocr-panel-footer">
+                <button
+                  type="button"
+                  className="ocr-footer-btn"
+                  disabled={loadingImaging || !imagingDoc}
+                  onClick={downloadImagingDocCsv}
+                  title="Download document imaging as CSV"
+                >
+                  <Download size={14} aria-hidden="true" />
+                  Document CSV
+                </button>
+                <button
+                  type="button"
+                  className="ocr-footer-btn primary"
+                  disabled={loadingImaging || !imagingDoc}
+                  onClick={downloadImagingDocJson}
+                  title="Download document imaging as JSON"
+                >
+                  <Download size={14} aria-hidden="true" />
+                  Document JSON
                 </button>
               </div>
             )}

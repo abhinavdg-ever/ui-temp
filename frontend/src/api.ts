@@ -17,6 +17,7 @@ export type PageSummary = {
   has_preliminary_ocr: boolean;
   has_final1_ocr: boolean;
   has_final2_ocr: boolean;
+  has_imaging?: boolean;
 };
 
 export type FolderDetail = FolderSummary & {
@@ -26,10 +27,42 @@ export type FolderDetail = FolderSummary & {
 /** preliminary = Tess (_prelim), final1 = OSS (_final1), final2 = AzDocInt (_final2) */
 export type OcrKind = "preliminary" | "final1" | "final2";
 
+export type OutputMode = "ocr" | "imaging";
+
 export type OcrTextResponse = {
   folder_id: string;
   kind: OcrKind;
   text: string;
+};
+
+export type ImagingPageResult = {
+  pageNumber: number;
+  fileName: string;
+  memberName: string | null;
+  memberDob: string | null;
+  memberId: string | null;
+  memberConfidence: number | null;
+  handwrittenOrPrinted: string | null;
+  orientationAngle: number | null;
+  tiltAngle: number | null;
+  mirrored: boolean | null;
+  pageQualityConfidence: number | null;
+  dos: string | null;
+  dosConfidence: number | null;
+  pageType: string | null;
+  pageTypeConfidence: number | null;
+};
+
+export type ImagingManifestDetails = {
+  member: string | null;
+  dob: string | null;
+  memberId: string | null;
+};
+
+export type ImagingDocumentResponse = {
+  folder_id: string;
+  manifest: ImagingManifestDetails;
+  pages: ImagingPageResult[];
 };
 
 export type BlobAuthMode = "entra" | "sas";
@@ -83,6 +116,10 @@ export function getFolder(folderId: string): Promise<FolderDetail> {
 export function getFolderOcr(folderId: string, kind: OcrKind): Promise<OcrTextResponse> {
   const params = new URLSearchParams({ kind });
   return api(`/api/folders/${encodeURIComponent(folderId)}/ocr?${params}`);
+}
+
+export function getFolderImaging(folderId: string): Promise<ImagingDocumentResponse> {
+  return api(`/api/folders/${encodeURIComponent(folderId)}/imaging`);
 }
 
 export function pageImageUrl(folderId: string, pageNumber: number): string {

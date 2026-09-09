@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from app.core.schemas import FolderDetail, FolderSummary, OcrTextResponse
+from app.core.schemas import FolderDetail, FolderSummary, ImagingDocumentResponse, OcrTextResponse
 
 
 class FolderRepository(ABC):
@@ -19,4 +19,8 @@ class FolderRepository(ABC):
 
     @abstractmethod
     def get_ocr_text(self, folder_id: str, kind: str) -> OcrTextResponse:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_imaging(self, folder_id: str) -> ImagingDocumentResponse:
         raise NotImplementedError

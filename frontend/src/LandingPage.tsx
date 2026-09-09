@@ -19,7 +19,7 @@ import {
 const PAGE_SIZE = 15;
 
 type Props = {
-  onView: (folderId: string) => void;
+  onView: (folderId: string, mode?: "ocr" | "imaging") => void;
   onOpenFileViewer?: () => void;
 };
 
@@ -331,7 +331,7 @@ export default function LandingPage({ onView, onOpenFileViewer }: Props) {
                           <button
                             type="button"
                             className="action-icon-btn"
-                            onClick={() => onView(folder.id)}
+                            onClick={() => onView(folder.id, "ocr")}
                             title="View OCR"
                             aria-label={`View OCR for ${folder.name}`}
                           >
@@ -341,9 +341,9 @@ export default function LandingPage({ onView, onOpenFileViewer }: Props) {
                           <button
                             type="button"
                             className="action-icon-btn"
-                            disabled
-                            title="Imaging (coming soon)"
-                            aria-label={`View Imaging for ${folder.name} (disabled)`}
+                            onClick={() => onView(folder.id, "imaging")}
+                            title="View Imaging"
+                            aria-label={`View Imaging for ${folder.name}`}
                           >
                             <ScanSearch size={16} aria-hidden="true" />
                             Imaging

@@ -25,6 +25,7 @@ class PageSummary(BaseModel):
     has_preliminary_ocr: bool = False
     has_final1_ocr: bool = False
     has_final2_ocr: bool = False
+    has_imaging: bool = False
 
 
 class FolderDetail(BaseModel):
@@ -44,6 +45,40 @@ class OcrTextResponse(BaseModel):
     text: str
 
 
+class ImagingPageResult(BaseModel):
+    """Per-page imaging fields (dummy/local JSON for now; Postgres later)."""
+
+    pageNumber: int
+    fileName: str
+    memberName: str | None = None
+    memberDob: str | None = None
+    memberId: str | None = None
+    memberConfidence: float | None = None
+    handwrittenOrPrinted: str | None = None
+    orientationAngle: float | None = None
+    tiltAngle: float | None = None
+    mirrored: bool | None = None
+    pageQualityConfidence: float | None = None
+    dos: str | None = None
+    dosConfidence: float | None = None
+    pageType: str | None = None
+    pageTypeConfidence: float | None = None
+
+
+class ImagingManifestDetails(BaseModel):
+    """Expected manifest identity for the chart (dummy until Postgres)."""
+
+    member: str | None = None
+    dob: str | None = None
+    memberId: str | None = None
+
+
+class ImagingDocumentResponse(BaseModel):
+    folder_id: str
+    manifest: ImagingManifestDetails = Field(default_factory=ImagingManifestDetails)
+    pages: list[ImagingPageResult] = Field(default_factory=list)
+
+
 class HealthResponse(BaseModel):
     status: str
     data_mode: str
@@ -56,8 +91,6 @@ class AppConfigResponse(BaseModel):
     blob_account_url: str = ""
     blob_container: str = ""
     blob_path_template: str = "{folder}/pages/{filename}"
-    # Entra: server proxies blobs — no UI secret prompt
     blob_entra_ready: bool = False
-    # Legacy SAS: UI must collect a token once when true
     blob_auth_required: bool = False
     blob_sas_configured: bool = False

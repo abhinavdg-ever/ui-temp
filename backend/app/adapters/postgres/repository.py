@@ -3,13 +3,14 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from app.adapters.base import FolderRepository
-from app.core.schemas import FolderDetail, FolderSummary, OcrTextResponse
+from app.core.schemas import FolderDetail, FolderSummary, ImagingDocumentResponse, OcrTextResponse
 
 
 class PostgresFolderRepository(FolderRepository):
     """Postgres-backed folder repository.
 
     Wired for DATA_MODE=postgres but not implemented yet — local mode is the active path.
+    Imaging will read from SQL once the schema is provided.
     """
 
     def __init__(self, database_url: str):
@@ -37,4 +38,10 @@ class PostgresFolderRepository(FolderRepository):
         raise HTTPException(
             status_code=501,
             detail="Postgres mode is not implemented yet. Set DATA_MODE=local in .env.",
+        )
+
+    def get_imaging(self, folder_id: str) -> ImagingDocumentResponse:
+        raise HTTPException(
+            status_code=501,
+            detail="Postgres imaging is not implemented yet. Set DATA_MODE=local in .env.",
         )

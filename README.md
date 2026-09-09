@@ -5,9 +5,9 @@ Browse document folders with page images and OCR side-by-side (Preliminary Tess 
 ## Features
 
 - **Login** — username/password gate before History (`imaging-user` / `aipocpw2026`)
-- **Landing (History)** — search, sort (filename / pages / last updated), OCR status (Queued / In Progress / Completed / Failed), OCR/Imaging icons (Imaging disabled), 15 per page with compact page numbers
-- **Detail** — page viewer (left) + mode icons **OCR** / **Imaging** (Imaging disabled); OCR tabs: **Preliminary (Tess)** / **Final (OSS)** / **Final (AzDocInt)**; download page/full OCR
-- **Data modes** via `.env`: `local` (default) or `postgres` (stubbed)
+- **Landing (History)** — search, sort (filename / pages / last updated), OCR status (Queued / In Progress / Completed / Failed), OCR/Imaging icons, 15 per page with compact page numbers
+- **Detail** — page viewer (left) + mode icons **OCR** / **Imaging**; OCR tabs: **Preliminary (Tess)** / **Final (OSS)** / **Final (AzDocInt)**; Imaging tabs: **Page Details** / **Doc Summary**; download OCR text or document imaging (CSV + JSON)
+- **Data modes** via `.env`: `local` (default) or `postgres` (stubbed — imaging uses dummy rows until schema is wired)
 - **Ad-hoc scripts** — see [`ad-hoc-scripts/ADHOC_README.md`](ad-hoc-scripts/ADHOC_README.md) to organize images + OCR into `pages/` / `ocr/`
 - **Docker** — backend `:3000`, frontend `:3001` (nginx proxies `/api`)
 
@@ -20,6 +20,7 @@ data/folders/<folder_name>/
   ocr/<folder_name>_prelim.txt     # Preliminary (Tess)
   ocr/<folder_name>_final1.txt     # Final (OSS)
   ocr/<folder_name>_final2.json    # Final (AzDocInt) — pages[].content extracted for UI
+  imaging/<folder_name>_imaging.json   # optional; dummy page rows if missing
 ```
 
 OCR text files (prelim / final1) are one document each. Pages are split on filename markers that match the image name exactly:
@@ -38,6 +39,42 @@ AzDocInt `_final2.json` uses:
 ```
 
 The API extracts `pages[].content` (falling back to `lines[].content`) and serves the same marker format to the UI.
+
+Imaging JSON (optional) shape:
+
+```json
+{
+  "manifest": {
+    "member": "Gonzalez Stephen",
+    "dob": "09/03/1942",
+    "memberId": "MEM-DEMO-240315"
+  },
+  "pages": [
+    {
+      "pageNumber": 1,
+      "fileName": "1.jpg",
+      "memberName": "Gonzalez Stephen",
+      "memberDob": "09/03/1942",
+      "memberId": "MEM-DEMO-240315",
+      "memberConfidence": 0.96,
+      "handwrittenOrPrinted": "Printed",
+      "orientationAngle": 0.64,
+      "tiltAngle": 1.2,
+      "mirrored": false,
+      "pageQualityConfidence": 0.94,
+      "dos": "01/03/2024",
+      "dosConfidence": 0.91,
+      "pageType": "Daily Note",
+      "pageTypeConfidence": 0.88
+    }
+  ]
+}
+```
+
+If `imaging/<folder>_imaging.json` is missing, the API returns **dummy backup rows** so the Imaging UI still works (pending Postgres).
+
+Imaging downloads are **document-level only** (CSV + JSON).
+
 ## Docker (VM)
 
 Backend listens on **3000**, UI on **3001**.
@@ -160,3 +197,4 @@ See root `.env`:
 - `GET /api/folders/{id}` — folder + pages
 - `GET /api/folders/{id}/pages/{n}/image` — page image
 - `GET /api/folders/{id}/ocr?kind=preliminary|final1|final2` — folder OCR (`*_prelim.txt` / `*_final1.txt` / `*_final2.json`)
+- `GET /api/folders/{id}/imaging` — imaging page results (local JSON or dummy backup; Postgres later)

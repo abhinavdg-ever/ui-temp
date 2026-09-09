@@ -4,15 +4,21 @@ import FolderViewer from "./FolderViewer";
 import FileViewer from "./FileViewer";
 import LoginPage from "./LoginPage";
 import UserProfileMenu from "./UserProfileMenu";
+import type { OutputMode } from "./api";
 
 const AUTH_KEY = "advantmed_imaging_auth";
 
 type Route =
   | { view: "landing" }
-  | { view: "folder"; folderId: string }
+  | { view: "folder"; folderId: string; mode: OutputMode }
   | { view: "file-viewer"; folderId?: string };
 
-function parsePath(pathname: string): Route {
+function parseMode(raw: string | null): OutputMode {
+  return raw === "imaging" ? "imaging" : "ocr";
+}
+
+function parsePath(pathname: string, search: string): Route {
+  const params = new URLSearchParams(search);
   const fileMatch = pathname.match(/^\/file-viewer(?:\/([^/]+))?\/?$/);
   if (fileMatch) {
     return {
@@ -22,14 +28,19 @@ function parsePath(pathname: string): Route {
   }
   const match = pathname.match(/^\/folders\/([^/]+)\/?$/);
   if (match) {
-    return { view: "folder", folderId: decodeURIComponent(match[1]) };
+    return {
+      view: "folder",
+      folderId: decodeURIComponent(match[1]),
+      mode: parseMode(params.get("mode")),
+    };
   }
   return { view: "landing" };
 }
 
 function pathFor(route: Route): string {
   if (route.view === "folder") {
-    return `/folders/${encodeURIComponent(route.folderId)}`;
+    const base = `/folders/${encodeURIComponent(route.folderId)}`;
+    return route.mode === "imaging" ? `${base}?mode=imaging` : base;
   }
   if (route.view === "file-viewer") {
     return route.folderId
@@ -49,17 +60,20 @@ function readAuth(): boolean {
 
 export default function App() {
   const [authed, setAuthed] = useState(readAuth);
-  const [route, setRoute] = useState<Route>(() => parsePath(window.location.pathname));
+  const [route, setRoute] = useState<Route>(() =>
+    parsePath(window.location.pathname, window.location.search),
+  );
 
   useEffect(() => {
-    const onPop = () => setRoute(parsePath(window.location.pathname));
+    const onPop = () => setRoute(parsePath(window.location.pathname, window.location.search));
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
   function navigate(next: Route) {
     const path = pathFor(next);
-    if (path !== window.location.pathname) {
+    const current = `${window.location.pathname}${window.location.search}`;
+    if (path !== current) {
       window.history.pushState(null, "", path);
     }
     setRoute(next);
@@ -128,7 +142,9 @@ export default function App() {
       <main className="main">
         {route.view === "landing" ? (
           <LandingPage
-            onView={(folderId) => navigate({ view: "folder", folderId })}
+            onView={(folderId, mode = "ocr") =>
+              navigate({ view: "folder", folderId, mode })
+            }
             onOpenFileViewer={() => navigate({ view: "file-viewer" })}
           />
         ) : route.view === "file-viewer" ? (
@@ -139,7 +155,11 @@ export default function App() {
         ) : (
           <FolderViewer
             folderId={route.folderId}
+            initialMode={route.mode}
             onBack={() => navigate({ view: "landing" })}
+            onModeChange={(mode) =>
+              navigate({ view: "folder", folderId: route.folderId, mode })
+            }
           />
         )}
       </main>

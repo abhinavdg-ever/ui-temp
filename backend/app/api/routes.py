@@ -11,6 +11,7 @@ from app.core.schemas import (
     FolderDetail,
     FolderSummary,
     HealthResponse,
+    ImagingDocumentResponse,
     OcrTextResponse,
 )
 from app.services.blob_store import download_blob_bytes
@@ -147,6 +148,15 @@ def get_folder_ocr(
     repo: FolderRepository = Depends(get_repository),
 ) -> OcrTextResponse:
     return repo.get_ocr_text(folder_id, kind)
+
+
+@router.get("/folders/{folder_id}/imaging", response_model=ImagingDocumentResponse)
+def get_folder_imaging(
+    folder_id: str,
+    repo: FolderRepository = Depends(get_repository),
+) -> ImagingDocumentResponse:
+    """Imaging page/document results (dummy/local JSON until Postgres schema lands)."""
+    return repo.get_imaging(folder_id)
 
 
 def _media_type(suffix: str) -> str:
