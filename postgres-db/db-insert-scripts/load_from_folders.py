@@ -1,15 +1,24 @@
 #!/usr/bin/env python3
 """Load chart folders + metadata + OCR into Postgres (abridged schema).
 
+Expected layouts:
+
+  Monorepo (AI Project POC):
+    05-imaging-ui/          ← DATA_ROOT, .env
+    06-postgres-db/         ← this pack (ddl, metadata, db-insert-scripts)
+
+  Nested (standalone imaging-ui repo):
+    imaging-ui/
+      data/folders/
+      postgres-db/          ← this pack
+      .env
+
 db-insert writes:
-  - chart_list / page_list   ← data/folders/<chart>/pages (+ BLOB_CONTAINER / path)
-  - manifest_member_list     ← stacked metadata_R{n}_B{n}.csv files (one below the other)
+  - chart_list / page_list   ← <imaging-ui>/data/folders/<chart>/pages
+  - manifest_member_list     ← stacked metadata_R{n}_B{n}.csv (or Metadata_R*_B*.csv)
   - ocr_results              ← ocr/*_prelim / *_final1 / *_final2
 
-Frontend later reads these tables (DATA_MODE=postgres).
-
-Usage:
-  export DATABASE_URL=postgresql://user:pass@localhost:5432/imaging
+Usage (from either layout; .env is auto-loaded from 05-imaging-ui when present):
   python load_from_folders.py --ddl
   python load_from_folders.py --metadata-dir ../metadata
 """
@@ -25,21 +34,80 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-try:
-    import psycopg
-except ImportError:
-    print("Install psycopg: pip install 'psycopg[binary]>=3.2'", file=sys.stderr)
-    sys.exit(1)
+# psycopg imported lazily in apply_ddl / load paths so --help works without it
 
-ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DATA_ROOT = Path(os.environ.get("DATA_ROOT", ROOT / "data" / "folders"))
-DDL_PATH = Path(__file__).resolve().parents[1] / "ddl-scripts" / "001_schema.sql"
-DEFAULT_METADATA_DIR = Path(__file__).resolve().parents[1] / "metadata"
+SCRIPT_DIR = Path(__file__).resolve().parent
+PG_PACK_ROOT = SCRIPT_DIR.parent  # …/06-postgres-db or …/postgres-db
+DDL_PATH = PG_PACK_ROOT / "ddl-scripts" / "001_schema.sql"
+DEFAULT_METADATA_DIR = PG_PACK_ROOT / "metadata"
+
+# Sibling UI folder names under the monorepo root
+_IMAGING_UI_DIR_NAMES = (
+    "05-imaging-ui",
+    "advantmed-imaging-ui",
+    "ui-temp",
+    "imaging-ui",
+)
+
+
+def find_imaging_ui_root() -> Path | None:
+    """Locate imaging-ui for DATA_ROOT / .env (sibling or parent of postgres-db pack)."""
+    parent = PG_PACK_ROOT.parent
+    for name in _IMAGING_UI_DIR_NAMES:
+        cand = parent / name
+        if (cand / ".env").is_file() or (cand / "data" / "folders").is_dir():
+            return cand.resolve()
+    # Nested: postgres-db lives inside the imaging-ui repo
+    if (parent / "data" / "folders").is_dir() or (parent / ".env").is_file():
+        return parent.resolve()
+    return None
+
+
+def _load_env_file(path: Path) -> None:
+    """Minimal .env loader (does not override existing os.environ keys)."""
+    if not path.is_file():
+        return
+    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip("'").strip('"')
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+def bootstrap_env() -> Path | None:
+    """Load .env from imaging-ui (sibling 05-imaging-ui or nested parent)."""
+    ui = find_imaging_ui_root()
+    if ui:
+        _load_env_file(ui / ".env")
+    _load_env_file(PG_PACK_ROOT / ".env")
+    return ui
+
+
+def default_data_root(ui_root: Path | None) -> Path:
+    if os.environ.get("DATA_ROOT"):
+        return Path(os.environ["DATA_ROOT"])
+    if ui_root is not None:
+        return ui_root / "data" / "folders"
+    return PG_PACK_ROOT.parent / "data" / "folders"
+
+
+def psycopg_dsn(url: str) -> str:
+    url = (url or "").strip()
+    if url.startswith("postgresql+psycopg://"):
+        return "postgresql://" + url[len("postgresql+psycopg://") :]
+    if url.startswith("postgres+psycopg://"):
+        return "postgresql://" + url[len("postgres+psycopg://") :]
+    return url
+
 
 IMAGE_RE = re.compile(r"\.(jpe?g|png|webp|tif{1,2})$", re.IGNORECASE)
 PAGE_NUM_RE = re.compile(r"^(\d+)\.(jpe?g|png|webp|tif{1,2})$", re.IGNORECASE)
 OCR_MARKER_RE = re.compile(r"^=====\s*(.+?)\s*=====\s*$", re.MULTILINE)
-# metadata_R1_B1.csv, metadata_R2_B3.csv, …
+# metadata_R1_B1.csv / Metadata_R1_B1.csv
 METADATA_FILE_RE = re.compile(r"^metadata_R(\d+)_B(\d+)\.csv$", re.IGNORECASE)
 
 # UI / file suffix → ocr_results.ocr_type
@@ -194,16 +262,25 @@ def load_stacked_metadata_rows(
     return stacked, sources
 
 
-def apply_ddl(conn: psycopg.Connection, ddl_path: Path) -> None:
+def _require_psycopg():
+    try:
+        import psycopg
+    except ImportError:
+        print("Install psycopg: pip install 'psycopg[binary]>=3.2'", file=sys.stderr)
+        sys.exit(1)
+    return psycopg
+
+
+def apply_ddl(conn: object, ddl_path: Path) -> None:
     sql = ddl_path.read_text(encoding="utf-8")
-    with conn.cursor() as cur:
+    with conn.cursor() as cur:  # type: ignore[attr-defined]
         cur.execute(sql)
-    conn.commit()
+    conn.commit()  # type: ignore[attr-defined]
     print(f"Applied DDL: {ddl_path}")
 
 
 def upsert_chart(
-    cur: psycopg.Cursor,
+    cur: object,
     chart_name: str,
     page_count: int,
     path: str,
@@ -225,7 +302,7 @@ def upsert_chart(
     return int(cur.fetchone()[0])
 
 
-def upsert_page(cur: psycopg.Cursor, chart_id: int, page_name: str) -> int:
+def upsert_page(cur: object, chart_id: int, page_name: str) -> int:
     cur.execute(
         """
         INSERT INTO page_list (chart_id, page_name, ocr_prelim_status, ocr_final_status)
@@ -239,7 +316,7 @@ def upsert_page(cur: psycopg.Cursor, chart_id: int, page_name: str) -> int:
 
 
 def load_metadata_for_chart(
-    cur: psycopg.Cursor,
+    cur: object,
     chart_id: int,
     rows: list[dict[str, str]],
 ) -> int:
@@ -267,7 +344,7 @@ def load_metadata_for_chart(
 
 
 def load_ocr_for_chart(
-    cur: psycopg.Cursor,
+    cur: object,
     chart_id: int,
     folder: Path,
     page_ids: dict[str, int],
@@ -380,7 +457,7 @@ def chart_blob_path(path_template: str, folder_name: str) -> str:
 
 
 def load_folders(
-    conn: psycopg.Connection,
+    conn: object,
     data_root: Path,
     metadata_rows: list[dict[str, str]],
     container_name: str,
@@ -443,19 +520,21 @@ def load_folders(
 
 
 def main() -> None:
+    ui_root = bootstrap_env()
+
     parser = argparse.ArgumentParser(
         description="db-insert: write charts, pages, metadata_Rn_Bn → manifest, OCR to Postgres"
     )
     parser.add_argument(
         "--database-url",
         default=os.environ.get("DATABASE_URL", ""),
-        help="Postgres URL (or set DATABASE_URL)",
+        help="Postgres URL (or set DATABASE_URL / imaging-ui .env)",
     )
     parser.add_argument(
         "--data-root",
         type=Path,
-        default=DEFAULT_DATA_ROOT,
-        help="Path to data/folders",
+        default=default_data_root(ui_root),
+        help="Path to data/folders (default: <05-imaging-ui>/data/folders)",
     )
     parser.add_argument(
         "--ddl",
@@ -466,7 +545,7 @@ def main() -> None:
         "--metadata-dir",
         type=Path,
         default=DEFAULT_METADATA_DIR,
-        help="Directory of metadata_R{n}_B{n}.csv files (stacked). Default: postgres-db/metadata",
+        help="Directory of metadata_R{n}_B{n}.csv files (default: ../metadata)",
     )
     parser.add_argument(
         "--metadata-csv",
@@ -486,13 +565,25 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if not args.database_url:
-        print("DATABASE_URL is required", file=sys.stderr)
+    database_url = psycopg_dsn(args.database_url)
+    if not database_url:
+        print(
+            "DATABASE_URL is required "
+            "(set env, or put it in 05-imaging-ui/.env next to 06-postgres-db)",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     data_root = args.data_root.resolve()
     if not data_root.is_dir():
         print(f"DATA_ROOT not found: {data_root}", file=sys.stderr)
+        if ui_root:
+            print(f"  imaging-ui root detected: {ui_root}", file=sys.stderr)
+        else:
+            print(
+                "  Could not find 05-imaging-ui sibling; pass --data-root explicitly",
+                file=sys.stderr,
+            )
         sys.exit(1)
 
     metadata_dir = args.metadata_dir.resolve() if args.metadata_dir else None
@@ -504,6 +595,9 @@ def main() -> None:
         print(f"Metadata dir not found: {metadata_dir}", file=sys.stderr)
         sys.exit(1)
 
+    if ui_root:
+        print(f"imaging-ui: {ui_root}")
+    print(f"postgres-db pack: {PG_PACK_ROOT}")
     print("Loading stacked metadata_Rn_Bn CSVs…")
     metadata_rows, sources = load_stacked_metadata_rows(metadata_dir, metadata_csv)
     if not sources:
@@ -514,7 +608,8 @@ def main() -> None:
         sys.exit(1)
     print(f"Stacked {len(sources)} file(s) → {len(metadata_rows)} total rows (write to DB)")
 
-    with psycopg.connect(args.database_url) as conn:
+    psycopg = _require_psycopg()
+    with psycopg.connect(database_url) as conn:
         if args.ddl:
             apply_ddl(conn, DDL_PATH)
         print(f"Loading folders from {data_root}")

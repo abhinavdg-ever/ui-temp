@@ -1,20 +1,45 @@
 # Postgres DB pack (abridged imaging schema)
 
+## Layouts
+
+**Monorepo (AI Project POC on your laptop):**
+
+```
+AI Project POC/
+  05-imaging-ui/                 ← UI app + .env + data/folders
+  06-postgres-db/                ← this pack
+    ddl-scripts/
+    metadata/Metadata_R1_B1.csv
+    db-insert-scripts/load_from_folders.py
+```
+
+**Nested (this standalone git repo):**
+
+```
+advantmed-imaging-ui/
+  data/folders/
+  postgres-db/                   ← same pack, nested
+  .env
+```
+
+The insert script auto-detects either layout and loads `DATABASE_URL` from `05-imaging-ui/.env` when present.
+
 ## DATA_MODE
 
 | Mode | Manifest | OCR |
 |------|----------|-----|
-| `local` | `postgres-db/metadata/metadata_R*_B*.csv` | Local `ocr/` files |
+| `local` | `06-postgres-db/metadata` (or nested `postgres-db/metadata`) | Local `ocr/` files |
 | `postgres` | `manifest_member_list` | `ocr_results` |
 
-## Data flow (db-insert **writes** to Postgres)
+## Quick start (Windows monorepo)
 
-| Table | Written by insert script | Notes |
-|-------|--------------------------|--------|
-| `manifest_member_list` | **YES** | From stacked `metadata_R{n}_B{n}.csv` |
-| `chart_list` | **YES** | Folder name = `chart_name`; `BLOB_CONTAINER` / `BLOB_PATH_TEMPLATE` |
-| `page_list` | **YES** | Pages under each chart |
-| `ocr_results` | **YES** | prelim→tesseract, final1→docling, final2→azuredocintel |
+```bat
+cd "c:\Projects\AI Project POC\06-postgres-db\db-insert-scripts"
+pip install -r requirements.txt
+python load_from_folders.py --ddl
+```
+
+No need to export `DATABASE_URL` if it is already in `05-imaging-ui\.env`.
 
 ## OCR mapping
 
@@ -23,23 +48,6 @@
 | prelim (Tess) | `tesseract` | `preliminary` |
 | final1 | `docling` | `final1` |
 | final2 | `azuredocintel` | `final2` |
-
-`raw_text` may be plain text or JSON string.
-
-## Quick start
-
-```bash
-cd postgres-db/db-insert-scripts
-pip install -r requirements.txt
-export DATABASE_URL=postgresql://USER:PASS@localhost:5432/imaging
-export BLOB_CONTAINER=...
-export BLOB_PATH_TEMPLATE='{folder}/pages/{filename}'
-
-python load_from_folders.py --ddl
-
-# Then in app .env:
-# DATA_MODE=postgres
-```
 
 ## Not loaded yet
 

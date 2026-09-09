@@ -17,8 +17,8 @@ class Settings(BaseSettings):
     data_mode: Literal["local", "postgres"] = "local"
     data_root: str = "./data/folders"
     # Local mode: stacked metadata_R{n}_B{n}.csv for Manifest Details
-    # Postgres mode: manifest_member_list is read from the database instead
-    metadata_root: str = "./postgres-db/metadata"
+    # Monorepo: ../06-postgres-db/metadata  |  Nested: ./postgres-db/metadata
+    metadata_root: str = "../06-postgres-db/metadata"
     database_url: str = "postgresql+psycopg://user:password@localhost:5432/advantmed_imaging"
     api_host: str = "127.0.0.1"
     api_port: int = 8002
@@ -54,6 +54,15 @@ class Settings(BaseSettings):
         path = Path(self.metadata_root)
         if not path.is_absolute():
             path = (ROOT_DIR / path).resolve()
+        if path.is_dir():
+            return path
+        # Fallbacks: nested pack inside this repo, or sibling 06-postgres-db
+        nested = (ROOT_DIR / "postgres-db" / "metadata").resolve()
+        if nested.is_dir():
+            return nested
+        sibling = (ROOT_DIR.parent / "06-postgres-db" / "metadata").resolve()
+        if sibling.is_dir():
+            return sibling
         return path
 
     @property
