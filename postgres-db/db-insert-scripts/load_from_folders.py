@@ -88,8 +88,16 @@ def bootstrap_env() -> Path | None:
 
 
 def default_data_root(ui_root: Path | None) -> Path:
-    if os.environ.get("DATA_ROOT"):
-        return Path(os.environ["DATA_ROOT"])
+    """Resolve DATA_ROOT; relative paths are relative to imaging-ui, not cwd."""
+    env = (os.environ.get("DATA_ROOT") or "").strip()
+    if env:
+        path = Path(env)
+        if path.is_absolute():
+            return path
+        # .env often has DATA_ROOT=./data/folders — that means under imaging-ui
+        if ui_root is not None:
+            return (ui_root / path).resolve()
+        return path.resolve()
     if ui_root is not None:
         return ui_root / "data" / "folders"
     return PG_PACK_ROOT.parent / "data" / "folders"
@@ -575,10 +583,17 @@ def main() -> None:
         sys.exit(1)
 
     data_root = args.data_root.resolve()
+    if not data_root.is_dir() and ui_root is not None:
+        # Fallback if relative DATA_ROOT was resolved against the wrong cwd
+        alt = (ui_root / "data" / "folders").resolve()
+        if alt.is_dir():
+            data_root = alt
     if not data_root.is_dir():
         print(f"DATA_ROOT not found: {data_root}", file=sys.stderr)
         if ui_root:
             print(f"  imaging-ui root detected: {ui_root}", file=sys.stderr)
+            print(f"  expected folders at: {ui_root / 'data' / 'folders'}", file=sys.stderr)
+            print("  or pass: --data-root \"…\\05-imaging-ui\\data\\folders\"", file=sys.stderr)
         else:
             print(
                 "  Could not find 05-imaging-ui sibling; pass --data-root explicitly",
