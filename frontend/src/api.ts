@@ -32,12 +32,16 @@ export type OcrTextResponse = {
   text: string;
 };
 
+export type BlobAuthMode = "entra" | "sas";
+
 export type AppConfig = {
   data_mode: string;
   file_viewer_blob_enabled: boolean;
+  blob_auth_mode: BlobAuthMode;
   blob_account_url: string;
   blob_container: string;
   blob_path_template: string;
+  blob_entra_ready: boolean;
   blob_auth_required: boolean;
   blob_sas_configured: boolean;
 };
@@ -83,4 +87,8 @@ export function getFolderOcr(folderId: string, kind: OcrKind): Promise<OcrTextRe
 
 export function pageImageUrl(folderId: string, pageNumber: number): string {
   return `/api/folders/${encodeURIComponent(folderId)}/pages/${pageNumber}/image`;
+}
+
+export function blobPageImageUrl(folderId: string, pageNumber: number): string {
+  return `/api/blob/${encodeURIComponent(folderId)}/pages/${pageNumber}/image`;
 }

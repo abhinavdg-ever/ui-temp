@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 OcrKind = Literal["preliminary", "final1", "final2"]
 OcrRunStatus = Literal["QUEUED", "IN_PROGRESS", "COMPLETED", "FAILED"]
+BlobAuthMode = Literal["entra", "sas"]
 
 
 class FolderSummary(BaseModel):
@@ -51,10 +52,12 @@ class HealthResponse(BaseModel):
 class AppConfigResponse(BaseModel):
     data_mode: str
     file_viewer_blob_enabled: bool = False
+    blob_auth_mode: BlobAuthMode = "entra"
     blob_account_url: str = ""
     blob_container: str = ""
     blob_path_template: str = "{folder}/pages/{filename}"
-    # When true, UI must collect a SAS / access token once for the session
+    # Entra: server proxies blobs — no UI secret prompt
+    blob_entra_ready: bool = False
+    # Legacy SAS: UI must collect a token once when true
     blob_auth_required: bool = False
-    # Present only when configured server-side (not required from UI)
     blob_sas_configured: bool = False

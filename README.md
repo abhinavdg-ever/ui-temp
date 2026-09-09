@@ -147,10 +147,12 @@ See root `.env`:
 | `DATABASE_URL` | Postgres URL (postgres mode — not implemented yet) |
 | `ALLOWED_ORIGINS` | CORS origins for direct API access |
 | `FILE_VIEWER_BLOB_ENABLED` | Show Local / Blob toggle in File Viewer |
-| `BLOB_ACCOUNT_URL` | Azure (or compatible) account URL |
+| `BLOB_AUTH_MODE` | `entra` (default, Shared Key off OK) or legacy `sas` |
+| `BLOB_ACCOUNT_URL` | Azure account URL (`https://….blob.core.windows.net`) |
 | `BLOB_CONTAINER` | Blob container name |
 | `BLOB_PATH_TEMPLATE` | Object key template (`{folder}`, `{filename}`, `{page}`) |
-| `BLOB_SAS_TOKEN` | Optional SAS. If empty, UI asks once per session |
+| `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` | App registration for Entra (or use Managed Identity / `az login`) |
+| `BLOB_SAS_TOKEN` | Legacy only when `BLOB_AUTH_MODE=sas` |
 
 ## API
 

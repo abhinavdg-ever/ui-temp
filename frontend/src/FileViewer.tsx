@@ -17,6 +17,7 @@ import {
   getAppConfig,
   getFolder,
   listFolders,
+  blobPageImageUrl,
   pageImageUrl,
   type AppConfig,
   type FolderDetail,
@@ -25,7 +26,7 @@ import {
 import {
   buildBlobObjectUrl,
   clearSessionSas,
-  hasBlobSessionAuth,
+  isBlobReady,
   readSessionSas,
 } from "./blobAuth";
 import BlobAuthModal from "./BlobAuthModal";
@@ -64,16 +65,18 @@ export default function FileViewer({ onBack, initialFolderId = null }: Props) {
       .then((cfg) => {
         if (cancelled) return;
         setConfig(cfg);
-        setBlobReady(hasBlobSessionAuth(cfg));
+        setBlobReady(isBlobReady(cfg));
       })
       .catch(() => {
         if (!cancelled) {
           setConfig({
             data_mode: "local",
             file_viewer_blob_enabled: false,
+            blob_auth_mode: "entra",
             blob_account_url: "",
             blob_container: "",
             blob_path_template: "{folder}/pages/{filename}",
+            blob_entra_ready: false,
             blob_auth_required: false,
             blob_sas_configured: false,
           });
@@ -153,12 +156,19 @@ export default function FileViewer({ onBack, initialFolderId = null }: Props) {
 
   function requestBlobMode() {
     if (!config?.file_viewer_blob_enabled) return;
-    if (hasBlobSessionAuth(config)) {
+    if (isBlobReady(config)) {
       setBlobReady(true);
       setSource("blob");
       return;
     }
-    setShowBlobAuth(true);
+    // Legacy SAS mode only — Entra is server-side and needs .env filled in
+    if (config.blob_auth_mode === "sas") {
+      setShowBlobAuth(true);
+      return;
+    }
+    setError(
+      "Blob (Entra) is not ready. Set BLOB_ACCOUNT_URL, BLOB_CONTAINER, and AZURE_* credentials (or Managed Identity) in .env.",
+    );
   }
 
   function imageSrc(pageNumber: number, filename: string): string {
@@ -166,8 +176,9 @@ export default function FileViewer({ onBack, initialFolderId = null }: Props) {
     if (source !== "blob" || !config) {
       return pageImageUrl(selectedId, pageNumber);
     }
-    if (config.blob_sas_configured) {
-      return `/api/blob/${encodeURIComponent(selectedId)}/pages/${pageNumber}/image`;
+    // Entra and server SAS both go through the API proxy/redirect
+    if (config.blob_auth_mode === "entra" || config.blob_sas_configured) {
+      return blobPageImageUrl(selectedId, pageNumber);
     }
     const sas = readSessionSas();
     return buildBlobObjectUrl(config, selectedId, filename, pageNumber, sas);
@@ -225,9 +236,13 @@ export default function FileViewer({ onBack, initialFolderId = null }: Props) {
             disabled={!blobEnabled}
             title={
               blobEnabled
-                ? blobReady
-                  ? "Blob viewer"
-                  : "Authenticate once to use Blob"
+                ? config?.blob_auth_mode === "entra"
+                  ? config.blob_entra_ready
+                    ? "Blob via Microsoft Entra ID"
+                    : "Configure BLOB_ACCOUNT_URL / BLOB_CONTAINER / AZURE_* in .env"
+                  : blobReady
+                    ? "Blob viewer"
+                    : "Authenticate once to use Blob"
                 : "Enable FILE_VIEWER_BLOB_ENABLED in .env"
             }
             aria-pressed={source === "blob"}
@@ -308,10 +323,21 @@ export default function FileViewer({ onBack, initialFolderId = null }: Props) {
           ) : source === "blob" && !blobReady ? (
             <div className="file-viewer-empty">
               <KeyRound size={28} aria-hidden="true" />
-              <p>Authenticate with a SAS token to view blob pages.</p>
-              <button type="button" className="ocr-footer-btn primary" onClick={requestBlobMode}>
-                Authenticate
-              </button>
+              {config?.blob_auth_mode === "entra" ? (
+                <>
+                  <p>Entra blob access is not configured on the server yet.</p>
+                  <p className="file-viewer-muted">
+                    Set BLOB_ACCOUNT_URL, BLOB_CONTAINER, and app registration or Managed Identity in .env.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p>Authenticate with a SAS token to view blob pages.</p>
+                  <button type="button" className="ocr-footer-btn primary" onClick={requestBlobMode}>
+                    Authenticate
+                  </button>
+                </>
+              )}
             </div>
           ) : (
             <>

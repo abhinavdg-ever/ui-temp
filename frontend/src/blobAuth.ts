@@ -56,8 +56,14 @@ export function buildBlobObjectUrl(
   return query ? `${base}?${query}` : base;
 }
 
-export function hasBlobSessionAuth(config: AppConfig): boolean {
+/** True when Blob mode can be used without further UI prompts. */
+export function isBlobReady(config: AppConfig): boolean {
   if (!config.file_viewer_blob_enabled) return false;
+  if (config.blob_auth_mode === "entra") return config.blob_entra_ready;
   if (config.blob_sas_configured) return true;
   return Boolean(readSessionSas());
+}
+
+export function hasBlobSessionAuth(config: AppConfig): boolean {
+  return isBlobReady(config);
 }
