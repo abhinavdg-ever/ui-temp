@@ -36,10 +36,15 @@ The insert script auto-detects either layout and loads `DATABASE_URL` from `05-i
 ```bat
 cd "c:\Projects\AI Project POC\06-postgres-db\db-insert-scripts"
 pip install -r requirements.txt
+
+REM Insert only (tables already created by DBA / prior DDL):
+python load_from_folders.py
+
+REM First-time schema create (needs CREATE on public — often fails for app users):
 python load_from_folders.py --ddl
 ```
 
-No need to export `DATABASE_URL` if it is already in `05-imaging-ui\.env`.
+Uses `DATABASE_URL` from `05-imaging-ui\.env` (e.g. `…@172.20.4.170/imaging_outputs`).
 
 ## OCR mapping
 

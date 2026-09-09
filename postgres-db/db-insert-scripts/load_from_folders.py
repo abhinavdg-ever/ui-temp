@@ -281,10 +281,34 @@ def _require_psycopg():
 
 def apply_ddl(conn: object, ddl_path: Path) -> None:
     sql = ddl_path.read_text(encoding="utf-8")
-    with conn.cursor() as cur:  # type: ignore[attr-defined]
-        cur.execute(sql)
-    conn.commit()  # type: ignore[attr-defined]
+    try:
+        with conn.cursor() as cur:  # type: ignore[attr-defined]
+            cur.execute(sql)
+        conn.commit()  # type: ignore[attr-defined]
+    except Exception as exc:
+        conn.rollback()  # type: ignore[attr-defined]
+        print(
+            f"DDL failed ({exc}).\n"
+            "  If tables already exist, re-run without --ddl (insert only).",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from exc
     print(f"Applied DDL: {ddl_path}")
+
+
+def describe_dsn(url: str) -> str:
+    """Host/db only (no credentials) for logs."""
+    try:
+        from urllib.parse import urlparse
+
+        p = urlparse(url)
+        host = p.hostname or "?"
+        port = f":{p.port}" if p.port else ""
+        db = (p.path or "/").lstrip("/") or "?"
+        user = p.username or "?"
+        return f"{user}@{host}{port}/{db}"
+    except Exception:
+        return "(unparsed)"
 
 
 def upsert_chart(
@@ -613,6 +637,7 @@ def main() -> None:
     if ui_root:
         print(f"imaging-ui: {ui_root}")
     print(f"postgres-db pack: {PG_PACK_ROOT}")
+    print(f"database: {describe_dsn(database_url)}")
     print("Loading stacked metadata_Rn_Bn CSVs…")
     metadata_rows, sources = load_stacked_metadata_rows(metadata_dir, metadata_csv)
     if not sources:
