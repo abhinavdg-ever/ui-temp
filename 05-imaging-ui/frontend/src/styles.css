@@ -1447,6 +1447,41 @@ input {
   min-width: 980px;
 }
 
+.imaging-rejection-table {
+  min-width: 0;
+  width: 100%;
+  table-layout: fixed;
+}
+
+.imaging-rejection-table th:nth-child(1),
+.imaging-rejection-table td:nth-child(1) {
+  width: 12%;
+}
+
+.imaging-rejection-table th:nth-child(2),
+.imaging-rejection-table td:nth-child(2) {
+  width: 18%;
+}
+
+.imaging-rejection-table th:nth-child(3),
+.imaging-rejection-table td:nth-child(3) {
+  width: 12%;
+}
+
+.imaging-rejection-table th:nth-child(4),
+.imaging-rejection-table td:nth-child(4) {
+  width: 12%;
+}
+
+.imaging-rejection-table th:nth-child(5),
+.imaging-rejection-table td:nth-child(5),
+.imaging-decision-reason {
+  width: 46%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .imaging-summary-table tbody tr:nth-child(even) {
   background: var(--neutral-50);
 }

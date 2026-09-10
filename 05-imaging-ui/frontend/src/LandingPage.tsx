@@ -44,6 +44,7 @@ function fmtUpdated(iso: string | null): string {
 function statusClass(status: OcrRunStatus): string {
   switch (status) {
     case "COMPLETED":
+    case "IMAGING_COMPLETED":
       return "status-pill status-completed";
     case "IMAGING_IN_PROGRESS":
       return "status-pill status-imaging";
@@ -77,8 +78,8 @@ export default function LandingPage({ onView, onOpenFileViewer }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [query, setQuery] = useState("");
-  const [sortKey, setSortKey] = useState<SortKey>("updated");
-  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [sortKey, setSortKey] = useState<SortKey>("filename");
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [statusFilter, setStatusFilter] = useState<"ALL" | OcrRunStatus>("ALL");
 
   async function load() {
@@ -230,6 +231,7 @@ export default function LandingPage({ onView, onOpenFileViewer }: Props) {
                   <option value="IN_PROGRESS">OCR in Progress</option>
                   <option value="COMPLETED">OCR Completed</option>
                   <option value="IMAGING_IN_PROGRESS">Imaging in Progress</option>
+                  <option value="IMAGING_COMPLETED">Imaging Full</option>
                   <option value="FAILED">Failed</option>
                 </select>
               </label>

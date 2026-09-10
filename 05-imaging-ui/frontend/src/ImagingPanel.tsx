@@ -236,7 +236,7 @@ function RejectionRulesTable({
   }
 
   return (
-    <table className="imaging-summary-table">
+    <table className="imaging-summary-table imaging-rejection-table">
       <thead>
         <tr>
           <th scope="col">Status</th>
@@ -253,7 +253,7 @@ function RejectionRulesTable({
             <td>{fmt(v.matchedName)}</td>
             <td>{fmtPagesMatched(v)}</td>
             <td>{fmtConfidence(v.matchedConfidence)}</td>
-            <td>{fmt(v.decisionReason)}</td>
+            <td className="imaging-decision-reason">{fmt(v.decisionReason)}</td>
           </tr>
         ))}
       </tbody>

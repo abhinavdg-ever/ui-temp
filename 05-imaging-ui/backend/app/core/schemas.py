@@ -9,6 +9,7 @@ OcrRunStatus = Literal[
     "IN_PROGRESS",
     "COMPLETED",
     "IMAGING_IN_PROGRESS",
+    "IMAGING_COMPLETED",
     "FAILED",
 ]
 BlobAuthMode = Literal["entra", "sas"]
