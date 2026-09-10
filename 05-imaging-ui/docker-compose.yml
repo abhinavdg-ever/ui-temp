@@ -1,15 +1,15 @@
 services:
   backend:
     build:
-      context: ./05-imaging-ui/backend
+      context: ./backend
     ports:
       - "3000:3000"
     env_file:
-      - ./05-imaging-ui/.env
+      - ./.env
     environment:
       DATA_MODE: ${DATA_MODE:-local}
       DATA_ROOT: /data/folders
-      # Local-mode Manifest Details CSVs (06-postgres-db/manifest)
+      # Local-mode Manifest Details CSVs (sibling 06-postgres-db/manifest)
       METADATA_ROOT: /data/manifest
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://127.0.0.1:3001,http://localhost:3001}
       # POC Postgres: database imaging_outputs, schema public @ 172.20.4.170
@@ -25,13 +25,13 @@ services:
       AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET:-}
       BLOB_SAS_TOKEN: ${BLOB_SAS_TOKEN:-}
     volumes:
-      - ${DATA_HOST_PATH:-./05-imaging-ui/data/folders}:/data/folders:ro
-      - ${METADATA_HOST_PATH:-./06-postgres-db/manifest}:/data/manifest:ro
+      - ${DATA_HOST_PATH:-./data/folders}:/data/folders:ro
+      - ${METADATA_HOST_PATH:-../06-postgres-db/manifest}:/data/manifest:ro
     restart: unless-stopped
 
   frontend:
     build:
-      context: ./05-imaging-ui/frontend
+      context: ./frontend
     ports:
       - "3001:3001"
     depends_on:

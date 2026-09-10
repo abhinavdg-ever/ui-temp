@@ -86,12 +86,13 @@ Imaging downloads are **document-level only** (CSV + JSON).
 
 ## Docker (VM)
 
-Backend listens on **3000**, UI on **3001**.
+Backend listens on **3000**, UI on **3001**. Run compose from **`05-imaging-ui/`**:
 
 ```bash
-# From monorepo root
-export DATA_HOST_PATH=./05-imaging-ui/data/folders
-export METADATA_HOST_PATH=./06-postgres-db/manifest
+cd 05-imaging-ui
+# optional overrides (defaults already set in docker-compose.yml):
+# export DATA_HOST_PATH=./data/folders
+# export METADATA_HOST_PATH=../06-postgres-db/manifest
 docker compose up --build -d
 ```
 
@@ -101,6 +102,7 @@ docker compose up --build -d
 Stop:
 
 ```bash
+cd 05-imaging-ui
 docker compose down
 ```
 
@@ -191,8 +193,8 @@ See `05-imaging-ui/.env`:
 | `DATA_MODE` | `local` (CSV metadata + file OCR) or `postgres` (manifest + OCR from DB) |
 | `DATA_ROOT` | Path to folders root (page images; Docker uses `/data/folders`) |
 | `METADATA_ROOT` | Manifest CSVs when `DATA_MODE=local` (`../06-postgres-db/manifest`) |
-| `DATA_HOST_PATH` | Host path mounted into Docker backend (default `./05-imaging-ui/data/folders`) |
-| `METADATA_HOST_PATH` | Host Manifest CSV dir for Docker (default `./06-postgres-db/manifest`) |
+| `DATA_HOST_PATH` | Host path mounted into Docker backend (default `./data/folders` from `05-imaging-ui/`) |
+| `METADATA_HOST_PATH` | Host Manifest CSV dir for Docker (default `../06-postgres-db/manifest`) |
 | `DATABASE_URL` | Postgres URL — DB `imaging_outputs` @ `172.20.4.170` (`DATA_MODE=postgres`) |
 | `DB_SCHEMA` | Schema for tables (POC: `public`) |
 | `ALLOWED_ORIGINS` | CORS origins for direct API access |
