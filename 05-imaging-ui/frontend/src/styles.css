@@ -545,6 +545,11 @@ input {
   background: var(--status-info-bg);
 }
 
+.status-imaging {
+  color: #92400e;
+  background: #fef3c7;
+}
+
 .status-completed {
   color: var(--status-success-fg);
   background: var(--status-success-bg);
@@ -1420,14 +1425,22 @@ input {
   display: flex;
   flex-direction: column;
   gap: 0.85rem;
+  min-height: 0;
 }
 
 .imaging-doc-tabs {
   margin-bottom: 0.75rem;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--card, #fff);
+  padding-bottom: 0.35rem;
 }
 
 .imaging-doc-summary {
-  overflow: auto;
+  /* Let .ocr-panel be the single scroll container */
+  overflow: visible;
+  min-height: 0;
 }
 
 .imaging-summary-table {

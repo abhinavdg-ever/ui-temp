@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     # Local mode: stacked metadata_R{n}_B{n}.csv for Manifest Details
     # Monorepo: ../06-postgres-db/manifest  |  Nested: ./postgres-db/manifest
     metadata_root: str = "../06-postgres-db/manifest"
+    # Pipeline CSV packs (01-ocr-extraction, 02-imaging-pipeline). Empty → derive from data_root.
+    monorepo_root: str = ""
     database_url: str = "postgresql+psycopg://aiuser:passwordpoc2026@172.20.4.170:5432/imaging_outputs"
     # POC tables are in public (database name is imaging_outputs)
     db_schema: str = "public"
@@ -50,6 +52,26 @@ class Settings(BaseSettings):
         if not path.is_absolute():
             path = (ROOT_DIR / path).resolve()
         return path
+
+    @property
+    def resolved_monorepo_root(self) -> Path:
+        """Root that contains 01-ocr-extraction / 02-imaging-pipeline / 06-postgres-db."""
+        raw = (self.monorepo_root or "").strip()
+        if raw:
+            path = Path(raw)
+            if not path.is_absolute():
+                path = (ROOT_DIR / path).resolve()
+            if path.is_dir():
+                return path
+        # data/folders → 05-imaging-ui → monorepo
+        derived = self.resolved_data_root.parent.parent.parent
+        if (derived / "02-imaging-pipeline").is_dir() or (derived / "01-ocr-extraction").is_dir():
+            return derived
+        # Docker fallback when only /data/folders is mounted without monorepo layout
+        for cand in (Path("/data/monorepo"), ROOT_DIR.parent):
+            if (cand / "02-imaging-pipeline").is_dir() or (cand / "01-ocr-extraction").is_dir():
+                return cand.resolve()
+        return derived
 
     @property
     def resolved_metadata_root(self) -> Path:

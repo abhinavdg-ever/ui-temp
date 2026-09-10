@@ -34,7 +34,24 @@ def read_csv_rows(path: Path) -> list[dict[str, str]]:
 
 
 def monorepo_root_from_data(data_root: Path) -> Path:
-    """data/folders → 05-imaging-ui → monorepo root."""
+    """Resolve pack root (01-ocr-extraction / 02-imaging-pipeline).
+
+    Prefer Settings.MONOREPO_ROOT / Docker /data/monorepo; else data/folders → … → monorepo.
+    """
+    try:
+        from app.core.config import get_settings
+
+        return get_settings().resolved_monorepo_root
+    except Exception:
+        pass
+    env = __import__("os").environ.get("MONOREPO_ROOT", "").strip()
+    if env:
+        path = Path(env)
+        if path.is_dir():
+            return path.resolve()
+    for cand in (Path("/data/monorepo"), data_root.parent.parent.parent):
+        if (cand / "02-imaging-pipeline").is_dir() or (cand / "01-ocr-extraction").is_dir():
+            return cand.resolve()
     return data_root.parent.parent.parent
 
 

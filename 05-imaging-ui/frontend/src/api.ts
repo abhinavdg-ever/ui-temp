@@ -1,4 +1,9 @@
-export type OcrRunStatus = "QUEUED" | "IN_PROGRESS" | "COMPLETED" | "FAILED";
+export type OcrRunStatus =
+  | "QUEUED"
+  | "IN_PROGRESS"
+  | "COMPLETED"
+  | "IMAGING_IN_PROGRESS"
+  | "FAILED";
 
 export type FolderSummary = {
   id: string;
@@ -103,8 +108,9 @@ export const OCR_TAB_LABELS: Record<OcrKind, string> = {
 
 export const OCR_STATUS_LABELS: Record<OcrRunStatus, string> = {
   QUEUED: "Queued",
-  IN_PROGRESS: "In Progress",
+  IN_PROGRESS: "OCR in Progress",
   COMPLETED: "OCR Completed",
+  IMAGING_IN_PROGRESS: "Imaging in Progress",
   FAILED: "Failed",
 };
 

@@ -4,7 +4,13 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 OcrKind = Literal["preliminary", "final1", "final2"]
-OcrRunStatus = Literal["QUEUED", "IN_PROGRESS", "COMPLETED", "FAILED"]
+OcrRunStatus = Literal[
+    "QUEUED",
+    "IN_PROGRESS",
+    "COMPLETED",
+    "IMAGING_IN_PROGRESS",
+    "FAILED",
+]
 BlobAuthMode = Literal["entra", "sas"]
 
 

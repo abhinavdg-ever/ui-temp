@@ -9,6 +9,17 @@ They assume:
 
 The scripts write `pages/` and `ocr/` **inside** each folder under the images root (so that tree can be pointed at by `DATA_ROOT`).
 
+## Postgres connection smoke test
+
+```bash
+cd 07-ad-hoc
+python test_postgres_connection.py
+# or
+python test_postgres_connection.py --url "postgresql://aiuser:…@172.20.4.170:5432/imaging_outputs"
+```
+
+Reads `DATABASE_URL` / `DB_SCHEMA` from `05-imaging-ui/.env`. Lists tables in the schema and row counts for common imaging tables.
+
 ## Target layout
 
 ```

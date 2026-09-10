@@ -71,6 +71,30 @@ function downloadJsonFile(filename: string, data: unknown) {
   downloadTextFile(filename, JSON.stringify(data, null, 2), "application/json;charset=utf-8");
 }
 
+/** Document-level DOS for download: prefer docDos*, else carry-forward / 2/2/2022. */
+const DEFAULT_DOC_DOS = "2/2/2022";
+
+function fillDocDosForDownload(pages: ImagingPageResult[]): ImagingPageResult[] {
+  let prevFrom: string | null = null;
+  let prevTo: string | null = null;
+  return [...pages]
+    .sort((a, b) => a.pageNumber - b.pageNumber)
+    .map((page) => {
+      let dosFrom = (page.docDosFrom || page.dosFrom || "").trim() || null;
+      let dosTo = (page.docDosTo || page.dosTo || "").trim() || null;
+      if (!dosFrom && !dosTo) {
+        dosFrom = prevFrom ?? DEFAULT_DOC_DOS;
+        dosTo = prevTo ?? DEFAULT_DOC_DOS;
+      } else {
+        if (!dosFrom) dosFrom = dosTo ?? prevFrom ?? DEFAULT_DOC_DOS;
+        if (!dosTo) dosTo = dosFrom ?? prevTo ?? DEFAULT_DOC_DOS;
+      }
+      prevFrom = dosFrom;
+      prevTo = dosTo;
+      return { ...page, docDosFrom: dosFrom, docDosTo: dosTo };
+    });
+}
+
 function findImagingPage(
   doc: ImagingDocumentResponse | null,
   page: { page_number: number; filename: string } | null,
@@ -275,63 +299,81 @@ export default function FolderViewer({
 
   function downloadImagingDocJson() {
     if (!imagingDoc) return;
-    downloadJsonFile(`${folderName}_imaging.json`, imagingDoc);
+    const status =
+      imagingDoc.verifications?.[0]?.finalStatus ??
+      imagingDoc.verification?.finalStatus ??
+      "";
+    const pages = fillDocDosForDownload(imagingDoc.pages).map((p) => ({
+      chartName: folderName,
+      pageName: p.fileName,
+      memberName: p.memberName,
+      memberID: p.memberId,
+      confidence: p.memberConfidence,
+      memberDob: p.memberDob,
+      handwrittenOrPrinted: p.handwrittenOrPrinted,
+      handwrittenOrPrintedConfidence: p.handwrittenOrPrintedConfidence ?? null,
+      orientationAngle: p.orientationAngle,
+      tiltAngle: p.tiltAngle,
+      mirrored: p.mirrored,
+      pageQualityConfidence: p.pageQualityConfidence,
+      pageType: p.pageType,
+      pageTypeConfidence: p.pageTypeConfidence,
+      dosFrom: p.docDosFrom ?? p.dosFrom,
+      dosTo: p.docDosTo ?? p.dosTo,
+      member_verification_status: status,
+    }));
+    downloadJsonFile(`${folderName}_imaging.json`, pages);
   }
 
   function downloadImagingDocCsv() {
     if (!imagingDoc) return;
     const headers = [
-      "pageNumber",
-      "fileName",
+      "chartName",
+      "pageName",
       "memberName",
+      "memberID",
+      "confidence",
       "memberDob",
-      "memberId",
-      "memberConfidence",
       "handwrittenOrPrinted",
+      "handwrittenOrPrintedConfidence",
       "orientationAngle",
       "tiltAngle",
       "mirrored",
       "pageQualityConfidence",
-      "dosFrom",
-      "dosTo",
-      "dosConfidence",
-      "docDosFrom",
-      "docDosTo",
       "pageType",
       "pageTypeConfidence",
-      "manifestMember",
-      "manifestDob",
-      "manifestMemberId",
+      "dosFrom",
+      "dosTo",
+      "member_verification_status",
     ];
     const esc = (v: unknown) => {
       const s = v === null || v === undefined ? "" : String(v);
       if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
       return s;
     };
-    const m = imagingDoc.manifest;
-    const rows = imagingDoc.pages.map((p) =>
+    const status =
+      imagingDoc.verifications?.[0]?.finalStatus ??
+      imagingDoc.verification?.finalStatus ??
+      "";
+    const rows = fillDocDosForDownload(imagingDoc.pages).map((p) =>
       [
-        p.pageNumber,
+        folderName,
         p.fileName,
         p.memberName,
-        p.memberDob,
         p.memberId,
         p.memberConfidence,
+        p.memberDob,
         p.handwrittenOrPrinted,
+        p.handwrittenOrPrintedConfidence ?? "",
         p.orientationAngle,
         p.tiltAngle,
         p.mirrored,
         p.pageQualityConfidence,
-        p.dosFrom,
-        p.dosTo,
-        p.dosConfidence,
-        p.docDosFrom ?? "",
-        p.docDosTo ?? "",
         p.pageType,
         p.pageTypeConfidence,
-        m?.member ?? "",
-        m?.dob ?? "",
-        m?.memberId ?? "",
+        p.docDosFrom ?? p.dosFrom,
+        p.docDosTo ?? p.dosTo,
+        status,
       ]
         .map(esc)
         .join(","),

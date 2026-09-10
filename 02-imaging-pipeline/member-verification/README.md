@@ -49,10 +49,10 @@ id,chart_id,final_status,matched_member_id,matched_name,confidence,pages_matched
 
 | Column | Imaging UI |
 |--------|------------|
-| `final_status` | Overall Verification + Rejection Rules → Status |
+| `final_status` | Doc Summary → Rejection Rules → Status |
 | `matched_name` | Matched name |
 | `confidence` (or `matched_confidence`) | Confidence |
 | `pages_matched` / `pages_checked` | Pages (`n/m`) |
 | `decision_reason` | Decision Reason |
 
-Match on `chart_id` = folder name. `matched_member_id` is loaded but not shown in the strip.
+Match on `chart_id` = folder name. Shown only under **Rejection Rules** (no overall strip).

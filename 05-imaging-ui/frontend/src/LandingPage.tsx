@@ -45,6 +45,8 @@ function statusClass(status: OcrRunStatus): string {
   switch (status) {
     case "COMPLETED":
       return "status-pill status-completed";
+    case "IMAGING_IN_PROGRESS":
+      return "status-pill status-imaging";
     case "IN_PROGRESS":
       return "status-pill status-progress";
     case "FAILED":
@@ -225,8 +227,9 @@ export default function LandingPage({ onView, onOpenFileViewer }: Props) {
                 >
                   <option value="ALL">All</option>
                   <option value="QUEUED">Queued</option>
-                  <option value="IN_PROGRESS">In Progress</option>
+                  <option value="IN_PROGRESS">OCR in Progress</option>
                   <option value="COMPLETED">OCR Completed</option>
+                  <option value="IMAGING_IN_PROGRESS">Imaging in Progress</option>
                   <option value="FAILED">Failed</option>
                 </select>
               </label>

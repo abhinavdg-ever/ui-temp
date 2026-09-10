@@ -284,6 +284,8 @@ class LocalFolderRepository(FolderRepository):
         self.data_root = data_root
         self.metadata_root = metadata_root
         self._overlay_chart_ids: set[str] | None = None
+        # chart key → page numbers that have BOTH member + DOS CSV entries
+        self._member_and_dos_pages: dict[str, set[int]] | None = None
 
     def _folder_dir(self, folder_id: str) -> Path:
         if "/" in folder_id or "\\" in folder_id or folder_id in (".", ".."):
@@ -385,10 +387,173 @@ class LocalFolderRepository(FolderRepository):
         return chart in ids or chart_id_key(chart) in ids
 
     def _imaging_processed_count(self, folder_dir: Path, page_count: int) -> int:
-        """Pages with real overlay data; avoid fabricating counts."""
-        if page_count == 0 or not self._has_imaging(folder_dir):
+        """Count pages that have both Member extraction AND DOS entries."""
+        if page_count == 0:
             return 0
-        return page_count
+        pages = self._page_files(folder_dir)
+        ready = self._member_and_dos_page_set(folder_dir.name)
+        if not ready:
+            return 0
+        count = 0
+        for num, path in pages:
+            if self._page_has_member_and_dos(num, path.name, ready):
+                count += 1
+        return count
+
+    def _page_has_member_and_dos(
+        self, page_number: int, filename: str, ready: set[int]
+    ) -> bool:
+        if page_number in ready:
+            return True
+        stem = Path(filename).stem
+        if stem.isdigit() and int(stem) in ready:
+            return True
+        return False
+
+    def _member_and_dos_page_set(self, chart_name: str) -> set[int]:
+        index = self._member_and_dos_pages_index()
+        from app.services.imaging_overlays import chart_id_key
+
+        return set(index.get(chart_name, set()) | index.get(chart_id_key(chart_name), set()))
+
+    def _member_and_dos_pages_index(self) -> dict[str, set[int]]:
+        """Cached chart → page numbers present in both member + DOS combined CSVs."""
+        if self._member_and_dos_pages is not None:
+            return self._member_and_dos_pages
+
+        from app.services.imaging_overlays import (
+            _chart_row_matches,
+            chart_id_key,
+            monorepo_root_from_data,
+            read_csv_rows,
+        )
+
+        root = monorepo_root_from_data(self.data_root)
+        dos_path = (
+            root
+            / "02-imaging-pipeline"
+            / "dos-extraction"
+            / "output"
+            / "dos_extraction.csv"
+        )
+        member_path = (
+            root
+            / "02-imaging-pipeline"
+            / "member-verification"
+            / "output"
+            / "member_extraction_results.csv"
+        )
+
+        def page_num_from_row(row: dict[str, str]) -> int | None:
+            for col in ("page_num", "page_number"):
+                raw = (row.get(col) or "").strip()
+                if raw.isdigit():
+                    return int(raw)
+            for col in ("page_name", "filename"):
+                raw = (row.get(col) or "").strip()
+                if not raw or raw.upper() == "N/A":
+                    continue
+                stem = Path(raw).stem
+                if stem.isdigit():
+                    return int(stem)
+                m = re.match(r"page[_\s-]?(\d+)", stem, re.IGNORECASE)
+                if m:
+                    return int(m.group(1))
+            return None
+
+        def chart_keys(row: dict[str, str]) -> list[str]:
+            raw = (row.get("chart_id") or row.get("chart_name") or row.get("folder") or "").strip()
+            if not raw:
+                return []
+            keys = [raw]
+            cid = chart_id_key(raw)
+            if cid != raw:
+                keys.append(cid)
+            return keys
+
+        def row_has_dos(row: dict[str, str]) -> bool:
+            for col in (
+                "dos_from",
+                "dos_to",
+                "dos_from_iso",
+                "dos_to_iso",
+                "dos",
+            ):
+                if (row.get(col) or "").strip():
+                    return True
+            return False
+
+        member_pages: dict[str, set[int]] = {}
+        for row in read_csv_rows(member_path):
+            num = page_num_from_row(row)
+            if num is None:
+                continue
+            for key in chart_keys(row):
+                member_pages.setdefault(key, set()).add(num)
+
+        dos_pages: dict[str, set[int]] = {}
+        for row in read_csv_rows(dos_path):
+            if not row_has_dos(row):
+                continue
+            num = page_num_from_row(row)
+            if num is None:
+                continue
+            for key in chart_keys(row):
+                dos_pages.setdefault(key, set()).add(num)
+
+        # Also include per-chart overrides under data/folders/*/imaging/
+        if self.data_root.is_dir():
+            for entry in self.data_root.iterdir():
+                if not entry.is_dir() or entry.name.startswith("."):
+                    continue
+                imaging = entry / "imaging"
+                if not imaging.is_dir():
+                    continue
+                chart = entry.name
+                for path in imaging.iterdir():
+                    if not path.is_file() or path.name.startswith("._"):
+                        continue
+                    name = path.name.lower()
+                    if name.endswith("_member_extraction.csv"):
+                        for row in read_csv_rows(path):
+                            num = page_num_from_row(row)
+                            if num is None:
+                                continue
+                            member_pages.setdefault(chart, set()).add(num)
+                            member_pages.setdefault(chart_id_key(chart), set()).add(num)
+                    if name.endswith("_dos.csv"):
+                        for row in read_csv_rows(path):
+                            if not row_has_dos(row):
+                                continue
+                            num = page_num_from_row(row)
+                            if num is None:
+                                continue
+                            dos_pages.setdefault(chart, set()).add(num)
+                            dos_pages.setdefault(chart_id_key(chart), set()).add(num)
+
+        both: dict[str, set[int]] = {}
+        all_keys = set(member_pages) | set(dos_pages)
+        for key in all_keys:
+            # Cross-match full id vs numeric prefix sets
+            mset = set(member_pages.get(key, set()))
+            dset = set(dos_pages.get(key, set()))
+            cid = chart_id_key(key)
+            if cid != key:
+                mset |= member_pages.get(cid, set())
+                dset |= dos_pages.get(cid, set())
+            # Also pull full-id pages when key is numeric
+            for other in list(member_pages):
+                if other != key and _chart_row_matches(other, key):
+                    mset |= member_pages[other]
+            for other in list(dos_pages):
+                if other != key and _chart_row_matches(other, key):
+                    dset |= dos_pages[other]
+            inter = mset & dset
+            if inter:
+                both[key] = inter
+
+        self._member_and_dos_pages = both
+        return both
 
     def _dummy_manifest(self) -> ImagingManifestDetails:
         return ImagingManifestDetails(
@@ -492,12 +657,18 @@ class LocalFolderRepository(FolderRepository):
             return page_count
         return 0
 
-    def _ocr_status(self, folder_dir: Path) -> OcrRunStatus:
-        """Derive status from available OCR artifacts.
+    def _ocr_status(
+        self, folder_dir: Path, *, imaging_processed: int = 0
+    ) -> OcrRunStatus:
+        """Folder status for History.
 
-        All three outputs (prelim, final1, final2) → COMPLETED ("OCR Completed").
-        Any partial OCR → IN_PROGRESS; none → QUEUED.
+        - OCR not all 3 engines → OCR in Progress (IN_PROGRESS)
+        - All 3 OCR done, no Member+DOS pages → OCR Completed (COMPLETED)
+        - Any page with Member + DOS → Imaging in Progress (IMAGING_IN_PROGRESS)
+        - No OCR yet → Queued
         """
+        if imaging_processed > 0:
+            return "IMAGING_IN_PROGRESS"
         present = sum(1 for kind in OCR_KINDS if self._has_ocr(folder_dir, kind))
         if present == len(OCR_KINDS):
             return "COMPLETED"
@@ -529,14 +700,17 @@ class LocalFolderRepository(FolderRepository):
                 continue
             pages = self._page_files(entry)
             page_count = len(pages)
+            imaging_processed = self._imaging_processed_count(entry, page_count)
             summaries.append(
                 FolderSummary(
                     id=entry.name,
                     name=entry.name,
                     page_count=page_count,
                     ocr_processed=self._ocr_processed_count(entry, page_count),
-                    imaging_processed=self._imaging_processed_count(entry, page_count),
-                    ocr_status=self._ocr_status(entry),
+                    imaging_processed=imaging_processed,
+                    ocr_status=self._ocr_status(
+                        entry, imaging_processed=imaging_processed
+                    ),
                     last_updated_at=_latest_mtime(self._touch_paths(entry, pages)),
                 )
             )
@@ -552,7 +726,7 @@ class LocalFolderRepository(FolderRepository):
         has_prelim = self._has_ocr(folder_dir, "preliminary")
         has_final1 = self._has_ocr(folder_dir, "final1")
         has_final2 = self._has_ocr(folder_dir, "final2")
-        has_imaging = self._has_imaging(folder_dir)
+        ready = self._member_and_dos_page_set(folder_dir.name)
         page_summaries = [
             PageSummary(
                 page_number=num,
@@ -561,17 +735,20 @@ class LocalFolderRepository(FolderRepository):
                 has_preliminary_ocr=has_prelim,
                 has_final1_ocr=has_final1,
                 has_final2_ocr=has_final2,
-                has_imaging=has_imaging,
+                has_imaging=self._page_has_member_and_dos(num, path.name, ready),
             )
             for num, path in pages
         ]
+        imaging_processed = sum(1 for p in page_summaries if p.has_imaging)
         return FolderDetail(
             id=folder_id,
             name=folder_dir.name,
             page_count=len(pages),
             ocr_processed=self._ocr_processed_count(folder_dir, len(pages)),
-            imaging_processed=self._imaging_processed_count(folder_dir, len(pages)),
-            ocr_status=self._ocr_status(folder_dir),
+            imaging_processed=imaging_processed,
+            ocr_status=self._ocr_status(
+                folder_dir, imaging_processed=imaging_processed
+            ),
             last_updated_at=_latest_mtime(self._touch_paths(folder_dir, pages)),
             pages=page_summaries,
         )
