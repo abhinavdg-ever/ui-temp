@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-ROOT_DIR = Path(__file__).resolve().parents[3]  # repo root (…/advantmed-imaging-ui)
+ROOT_DIR = Path(__file__).resolve().parents[3]  # 05-imaging-ui app root
 
 
 class Settings(BaseSettings):

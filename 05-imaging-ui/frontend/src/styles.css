@@ -1068,7 +1068,26 @@ input {
   justify-content: center;
   background: var(--neutral-100);
   padding: 0.75rem;
-  overflow: auto;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+}
+
+.page-stage.is-zoom-pannable {
+  cursor: grab;
+}
+
+.page-stage.is-zoom-pannable img {
+  cursor: grab;
+  /* Native image drag / selection would steal the pan gesture */
+  -webkit-user-drag: none;
+  user-select: none;
+  pointer-events: auto;
+}
+
+.page-stage.is-panning,
+.page-stage.is-panning img {
+  cursor: grabbing;
 }
 
 .page-stage img {
@@ -1078,6 +1097,7 @@ input {
   border-radius: 4px;
   box-shadow: 0 2px 10px rgba(19, 29, 17, 0.12);
   background: #fff;
+  will-change: transform;
 }
 
 .filmstrip {
@@ -1643,6 +1663,10 @@ input {
 
 .page-stage img {
   transition: transform 0.12s ease;
+}
+
+.page-stage.is-panning img {
+  transition: none;
 }
 
 .fs-chrome {

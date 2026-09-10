@@ -123,7 +123,12 @@ CREATE TABLE dos_extraction_results (
     id               BIGSERIAL PRIMARY KEY,
     chart_id         BIGINT NOT NULL REFERENCES chart_list(id) ON DELETE CASCADE,
     page_id          BIGINT NOT NULL REFERENCES page_list(id) ON DELETE CASCADE,
-    date_of_service  DATE,
+    -- Page-level extraction (NULL if this page had no explicit DOS)
+    dos_from         DATE,
+    dos_to           DATE,
+    -- Document-level effective DOS (carry-forward / preamble default 2022-02-02)
+    doc_dos_from     DATE,
+    doc_dos_to       DATE,
     confidence       NUMERIC(5,4),
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()

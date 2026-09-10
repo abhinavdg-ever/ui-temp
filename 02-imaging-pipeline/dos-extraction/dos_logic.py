@@ -1,0 +1,708 @@
+"""
+DOS (Date of Service) extraction — ported from advantmed-autocoderai-new/scripts/split.py.
+
+Per page (first 60 words for regex; fuller snippet for gated LLM):
+  1) regex + visit keywords → dos_from / dos_to
+  2) Azure OpenAI only if page has a clinical section cue
+     (Chief Complaint, HPI, Discharge Note, …)
+  3) For discharge / inpatient spans, LLM extracts both from and to
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from datetime import datetime
+from typing import Any, Optional
+
+from azure_llm import azure_deployment
+
+VISIT_KEYWORDS = [
+    # Visit / DOS
+    "EVISIT",
+    "E-VISIT",
+    "ANNUAL WELNESS VISIT",
+    "AWV",
+    "TELEMEDICINE",
+    "OFFICEVISIT",
+    "OFFICE VISIT",
+    "DATEOFVISIT",
+    "DATE OF VISIT",
+    "DATEOFSERVICE",
+    "DATE OF SERVICE",
+    "DOS",
+    "DOS FROM",
+    "DOS TO",
+    "DOS FROM DATE",
+    "DOS TO DATE",
+    "SERVICEDATE",
+    "SERVICE DATE",
+    "ENCOUNTERDATE",
+    "ENCOUNTER DATE",
+    "EDVISITDATE",
+    "ED VISIT DATE",
+    "PRESENTATIONDATE",
+    "PRESENTATION DATE",
+    "ARRIVALDATE",
+    "ARRIVAL DATE",
+    "INJECTION VISIT",
+    # Admit / from
+    "ADMITDATE",
+    "ADMIT DATE",
+    "ADMITTED DATE",
+    "ADMITTED ON",
+    "DATE OF ADMIT",
+    "DATE OF ADMISSION",
+    "ADMISSIONDATE",
+    "ADMISSION DATE",
+    "ADMISSION ON",
+    # Discharge / to
+    "DISCHARGEDATE",
+    "DISCHARGE DATE",
+    "DISCHARGED ON",
+    "DATE OF DISCHARGE",
+    "DISCHARGE ON",
+]
+
+# Keywords that specifically mean DOS From (admit side)
+FROM_KEYWORDS = {
+    "ADMITDATE",
+    "ADMIT DATE",
+    "ADMITTED DATE",
+    "ADMITTED ON",
+    "DATE OF ADMIT",
+    "DATE OF ADMISSION",
+    "ADMISSIONDATE",
+    "ADMISSION DATE",
+    "ADMISSION ON",
+    "DOS FROM",
+    "DOS FROM DATE",
+    "ARRIVALDATE",
+    "ARRIVAL DATE",
+}
+
+# Keywords that specifically mean DOS To (discharge side)
+TO_KEYWORDS = {
+    "DISCHARGEDATE",
+    "DISCHARGE DATE",
+    "DISCHARGED ON",
+    "DATE OF DISCHARGE",
+    "DISCHARGE ON",
+    "DOS TO",
+    "DOS TO DATE",
+}
+
+DATE_REGEXES = [
+    r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b",
+    r"\b\d{4}[/-]\d{1,2}[/-]\d{1,2}\b",
+    r"\b\d{1,2}\s+[A-Za-z]{3,9}\s*,?\s*\d{2,4}\b",
+    r"\b[A-Za-z]{3,9}\s+\d{1,2},?\s*\d{2,4}\b",
+]
+
+EXCLUSION_PATTERNS = [
+    r"\bdue\s+again\s+in\b",
+    r"\bdue\s+again\s+on\b",
+    r"\bdue\s+in\b",
+    r"\bdue\s+on\b",
+    r"\bdue\s+\d",
+    r"\breturn\s+in\b",
+    r"\breturn\s+on\b",
+    r"\breturn\s+visit\s+in\b",
+    r"\breturn\s+visit\s+on\b",
+    r"\bnext\s+visit\s+in\b",
+    r"\bnext\s+visit\s+on\b",
+    r"\bscheduled\s+for\b",
+    r"\bscheduled\s+on\b",
+    r"\badministered\s+on\s+date\s+of\s+service\b",
+    r"\bon\s+date\s+of\s+service\s*:",
+]
+
+# LLM is allowed only when one of these clinical section cues appears on the page
+LLM_SECTION_CUES = re.compile(
+    r"("
+    r"chief\s+complaint|"
+    r"history\s+of\s+present\s+illness|\bhpi\b|"
+    r"discharge\s+(summary|note|diagnos|"
+    r"instruction)|"
+    r"reason\s+for\s+(consult|visit|admission)|"
+    r"principal\s+diagnosis|"
+    r"admission\s+(date|note|diagnos)|"
+    r"hospital\s+course|"
+    r"progress\s+note|"
+    r"operative\s+(note|report)|"
+    r"consult(?:ation)?\s+note|"
+    r"emergency\s+(department|room)\s+note|"
+    r"\bed\s+note\b"
+    r")",
+    re.IGNORECASE,
+)
+
+DISCHARGE_CUE = re.compile(
+    r"(discharge\s+(summary|note|diagnos|date|instruction)|admission\s+date|"
+    r"hospital\s+course|date\s+of\s+admission|date\s+of\s+discharge)",
+    re.IGNORECASE,
+)
+
+# Non-encounter pages → document-level default DOS 02-02-2022
+NON_ENCOUNTER_CUE = re.compile(
+    r"("
+    r"immuni[sz]ation|"
+    r"vaccine|vaccination|"
+    r"flu\s+shot|"
+    r"covid[- ]?19\s+vacc|"
+    r"medication\s+list|"
+    r"problem\s+list|"
+    r"allergy\s+list|"
+    r"vital\s+signs|"
+    r"face\s*sheet|"
+    r"demographics|"
+    r"patient\s+information"
+    r")",
+    re.IGNORECASE,
+)
+
+# Preamble / non-encounter / before-first-DOS default
+DEFAULT_DOC_DOS = "02-02-2022"
+DEFAULT_DOC_DOS_ISO = "2022-02-02"
+
+UI_PAGE_MARKER_RE = re.compile(r"^=====\s*(.+?)\s*=====\s*$", re.MULTILINE)
+AUTOCODER_PAGE_RE = re.compile(
+    r"(^|\n)-----\s*Page\s*(\d+)[^\n]*\n", re.IGNORECASE
+)
+
+RANGE_RE = re.compile(
+    r"("
+    + "|".join(f"(?:{p})" for p in DATE_REGEXES)
+    + r")\s*(?:-|–|—|to|through|/)\s*("
+    + "|".join(f"(?:{p})" for p in DATE_REGEXES)
+    + r")",
+    re.IGNORECASE,
+)
+
+
+def normalize_date(date_str: str, reference_date: Optional[str] = None) -> str:
+    """Normalize to MM-DD-YYYY."""
+    if not date_str:
+        return "unknown"
+
+    date_str = date_str.strip()
+
+    match = re.match(r"(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})", date_str)
+    if match:
+        month, day, year = match.groups()
+        if len(year) == 2:
+            year = "20" + year if int(year) < 50 else "19" + year
+        return f"{month.zfill(2)}-{day.zfill(2)}-{year}"
+
+    match = re.match(r"(\d{4})[/-](\d{1,2})[/-](\d{1,2})", date_str)
+    if match:
+        year, month, day = match.groups()
+        return f"{month.zfill(2)}-{day.zfill(2)}-{year}"
+
+    match = re.match(r"(\d{1,2})\s+([A-Za-z]{3,9})\s*,?\s*(\d{2,4})", date_str)
+    if not match:
+        match = re.match(r"([A-Za-z]{3,9})\s+(\d{1,2}),?\s*(\d{2,4})", date_str)
+
+    if match:
+        month_names = {
+            "january": "01",
+            "jan": "01",
+            "february": "02",
+            "feb": "02",
+            "march": "03",
+            "mar": "03",
+            "april": "04",
+            "apr": "04",
+            "may": "05",
+            "june": "06",
+            "jun": "06",
+            "july": "07",
+            "jul": "07",
+            "august": "08",
+            "aug": "08",
+            "september": "09",
+            "sep": "09",
+            "sept": "09",
+            "october": "10",
+            "oct": "10",
+            "november": "11",
+            "nov": "11",
+            "december": "12",
+            "dec": "12",
+        }
+        parts = match.groups()
+        if parts[0].isdigit():
+            day, month_name, year = parts
+        else:
+            month_name, day, year = parts
+        month = month_names.get(month_name.lower(), "01")
+        if len(year) == 2:
+            year = "20" + year if int(year) < 50 else "19" + year
+        return f"{month}-{day.zfill(2)}-{year}"
+
+    return date_str
+
+
+def to_iso_date(mm_dd_yyyy: str) -> Optional[str]:
+    if not mm_dd_yyyy or mm_dd_yyyy in ("unknown", "null"):
+        return None
+    m = re.match(r"^(\d{2})-(\d{2})-(\d{4})$", mm_dd_yyyy.strip())
+    if not m:
+        return None
+    month, day, year = m.groups()
+    try:
+        datetime(int(year), int(month), int(day))
+    except ValueError:
+        return None
+    return f"{year}-{month}-{day}"
+
+
+def _slice_first_n_words(text: str, n: int = 60) -> str:
+    count = 0
+    end_idx = None
+    for m in re.finditer(r"\b\w+\b", text):
+        count += 1
+        if count >= n:
+            end_idx = m.end()
+            break
+    return text if end_idx is None else text[:end_idx]
+
+
+def _combined_date_regex() -> re.Pattern[str]:
+    return re.compile("(?:" + "|".join(DATE_REGEXES) + ")", re.IGNORECASE)
+
+
+def page_allows_llm(page_text: str) -> bool:
+    """True when page looks like a clinical note section LLM may help with."""
+    return bool(LLM_SECTION_CUES.search(page_text or ""))
+
+
+def is_discharge_like(page_text: str) -> bool:
+    return bool(DISCHARGE_CUE.search(page_text or ""))
+
+
+def is_non_encounter_page(page_text: str) -> bool:
+    """Immunization / med list / facesheet-style pages → use default doc DOS."""
+    return bool(NON_ENCOUNTER_CUE.search(page_text or ""))
+
+
+def _hit(
+    page_label: str,
+    page_number: Any,
+    dos_from: Optional[str],
+    dos_to: Optional[str] = None,
+    *,
+    match_type: str,
+    keyword: Optional[str] = None,
+    doc_dos_from: Optional[str] = None,
+    doc_dos_to: Optional[str] = None,
+) -> dict:
+    # Page-level: blank when not extracted on this page
+    page_from = dos_from if dos_from and dos_from != "unknown" else None
+    page_to = None
+    if page_from:
+        page_to = dos_to if dos_to and dos_to != "unknown" else page_from
+
+    d_from = doc_dos_from or page_from
+    d_to = doc_dos_to or page_to or d_from
+
+    return {
+        "page_name": page_label,
+        "page_number": page_number,
+        "dos_from": page_from or "",
+        "dos_to": page_to or "",
+        "dos_from_iso": to_iso_date(page_from) if page_from else "",
+        "dos_to_iso": to_iso_date(page_to) if page_to else "",
+        "doc_dos_from": d_from or "",
+        "doc_dos_to": d_to or "",
+        "doc_dos_from_iso": to_iso_date(d_from) if d_from else "",
+        "doc_dos_to_iso": to_iso_date(d_to) if d_to else "",
+        "match_type": match_type,
+        "keyword": keyword,
+    }
+
+
+def detect_dos_per_page(
+    text: str,
+    client: Any | None,
+    *,
+    use_llm: bool = True,
+) -> list[dict]:
+    """
+    One row per page.
+
+    Page-level (`dos_from` / `dos_to`):
+      - Filled only when DOS is extracted on that page; otherwise blank.
+
+    Document-level (`doc_dos_from` / `doc_dos_to`):
+      - Carry forward previous encounter DOS.
+      - Before first encounter DOS, or immunization / similar pages → 02-02-2022.
+    """
+    pages = split_ocr_into_pages(text)
+    rows: list[dict] = []
+    current_doc_from: Optional[str] = None
+    current_doc_to: Optional[str] = None
+    latest_ref: Optional[str] = None
+
+    for page in pages:
+        page_text = text[page["start"] : page["end"]]
+        page_label = page.get("page_name") or str(page.get("page"))
+
+        cleaned = re.sub(
+            r"-----\s*Page\s*\d+[^\n]*-----\s*", "", page_text, flags=re.IGNORECASE
+        )
+        cleaned = re.sub(r"[#\-*_=]", "", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned.strip()).strip().upper()
+        if cleaned == "UNACCEPT":
+            break
+
+        first_60 = _slice_first_n_words(page_text, 60)
+        page_from: Optional[str] = None
+        page_to: Optional[str] = None
+        match_type = ""
+        keyword: Optional[str] = None
+
+        regex_hit = extract_date_with_keyword_info(first_60)
+        if regex_hit and regex_hit.get("dos_from") and regex_hit["dos_from"] != "unknown":
+            page_from = regex_hit["dos_from"]
+            page_to = regex_hit.get("dos_to") or page_from
+            match_type = regex_hit.get("match_type", "regex")
+            keyword = regex_hit.get("keyword")
+        elif use_llm and client is not None and page_allows_llm(page_text):
+            pair = extract_dos_range_with_llm(
+                page_text,
+                page_label,
+                client,
+                reference_date=latest_ref,
+                discharge_like=is_discharge_like(page_text),
+            )
+            if pair:
+                page_from, page_to = pair
+                match_type = "llm"
+
+        # Document-level DOS
+        if is_non_encounter_page(page_text) and not page_from:
+            doc_from = DEFAULT_DOC_DOS
+            doc_to = DEFAULT_DOC_DOS
+            if not match_type:
+                match_type = "non_encounter_default"
+        elif page_from:
+            # New encounter — update carry-forward
+            current_doc_from = page_from
+            current_doc_to = page_to or page_from
+            latest_ref = page_from
+            doc_from = current_doc_from
+            doc_to = current_doc_to
+        elif current_doc_from:
+            # Inherit previous encounter
+            doc_from = current_doc_from
+            doc_to = current_doc_to or current_doc_from
+            if not match_type:
+                match_type = "carry_forward"
+        else:
+            # Before first DOS
+            doc_from = DEFAULT_DOC_DOS
+            doc_to = DEFAULT_DOC_DOS
+            if not match_type:
+                match_type = "preamble_default"
+
+        rows.append(
+            _hit(
+                page_label,
+                page.get("page"),
+                page_from,
+                page_to,
+                match_type=match_type,
+                keyword=keyword,
+                doc_dos_from=doc_from,
+                doc_dos_to=doc_to,
+            )
+        )
+
+    return rows
+
+
+def _date_after_keyword(text: str, text_lower: str, keyword: str) -> Optional[tuple[str, str]]:
+    """Return (normalized, raw) date appearing shortly after keyword, or None."""
+    keyword_lower = keyword.lower()
+    kw_pattern = r"\b" + re.escape(keyword_lower) + r"\b"
+    kw_match = re.search(kw_pattern, text_lower)
+    if not kw_match:
+        return None
+
+    if keyword_lower in ("date of service", "dateofservice", "dos"):
+        context_before = text_lower[max(0, kw_match.start() - 50) : kw_match.start()]
+        verb_patterns = [
+            r"\badministered\s+on\b",
+            r"\bperformed\s+on\b",
+            r"\bgiven\s+on\b",
+            r"\bdelivered\s+on\b",
+            r"\b(endoscopy|colonoscopy|biopsy|mammogram|procedure|test|exam)\s+\d",
+            r"\breceived\s+(upper\s+)?(endoscopy|colonoscopy|biopsy|mammogram|procedure)",
+            r"\breviewed\s+(the\s+)?(patient'?s\s+)?(psa|bone\s+densitometry|test|procedure)",
+        ]
+        if any(re.search(p, context_before) for p in verb_patterns):
+            return None
+
+    date_rx = _combined_date_regex()
+    search_start = kw_match.end()
+    search_end = min(search_start + 80, len(text))
+    date_search_text = text[search_start:search_end]
+
+    range_after = RANGE_RE.search(date_search_text)
+    if range_after:
+        d_from = normalize_date(range_after.group(1))
+        d_to = normalize_date(range_after.group(2))
+        if d_from != "unknown" and d_to != "unknown":
+            # Caller handles ranges; signal via special raw prefix
+            return (f"{d_from}|{d_to}", range_after.group(0))
+
+    date_match = date_rx.search(date_search_text)
+    if not date_match:
+        return None
+
+    date_pos = search_start + date_match.start()
+    context_before_date = text_lower[max(0, date_pos - 30) : date_pos]
+    if any(re.search(p, context_before_date) for p in EXCLUSION_PATTERNS):
+        return None
+
+    raw_date = date_match.group(0)
+    norm = normalize_date(raw_date)
+    if norm == "unknown":
+        return None
+    return norm, raw_date
+
+
+def extract_date_with_keyword_info(text: str) -> Optional[dict]:
+    """
+    Regex DOS near visit / admit / discharge keywords.
+    - Admit/From + Discharge/To → dos_from / dos_to
+    - Single date → dos_from == dos_to
+    """
+    text_lower = text.lower()
+
+    # Explicit A–B range anywhere in the window
+    range_match = RANGE_RE.search(text)
+    if range_match:
+        d_from = normalize_date(range_match.group(1))
+        d_to = normalize_date(range_match.group(2))
+        if d_from != "unknown" and d_to != "unknown":
+            return {
+                "dos_from": d_from,
+                "dos_to": d_to,
+                "raw_date": range_match.group(0),
+                "keyword": "DATE_RANGE",
+                "match_type": "regex_range",
+            }
+
+    from_date: Optional[str] = None
+    to_date: Optional[str] = None
+    from_kw: Optional[str] = None
+    to_kw: Optional[str] = None
+    generic: Optional[tuple[str, str, str]] = None  # norm, raw, keyword
+
+    for keyword in VISIT_KEYWORDS:
+        hit = _date_after_keyword(text, text_lower, keyword)
+        if not hit:
+            continue
+        norm, raw = hit
+        # Inline range encoded as from|to
+        if "|" in norm:
+            a, b = norm.split("|", 1)
+            return {
+                "dos_from": a,
+                "dos_to": b,
+                "raw_date": raw,
+                "keyword": keyword,
+                "match_type": "regex_range",
+            }
+
+        key_upper = keyword.upper()
+        if key_upper in FROM_KEYWORDS or keyword.upper() in FROM_KEYWORDS:
+            if from_date is None:
+                from_date, from_kw = norm, keyword
+        elif key_upper in TO_KEYWORDS or keyword.upper() in TO_KEYWORDS:
+            if to_date is None:
+                to_date, to_kw = norm, keyword
+        elif generic is None:
+            generic = (norm, raw, keyword)
+
+    if from_date and to_date:
+        return {
+            "dos_from": from_date,
+            "dos_to": to_date,
+            "raw_date": f"{from_date} → {to_date}",
+            "keyword": f"{from_kw}+{to_kw}",
+            "match_type": "regex_admit_discharge",
+        }
+    if from_date and not to_date:
+        return {
+            "dos_from": from_date,
+            "dos_to": from_date,
+            "raw_date": from_date,
+            "keyword": from_kw,
+            "match_type": "regex",
+        }
+    if to_date and not from_date:
+        return {
+            "dos_from": to_date,
+            "dos_to": to_date,
+            "raw_date": to_date,
+            "keyword": to_kw,
+            "match_type": "regex",
+        }
+    if generic:
+        norm, raw, keyword = generic
+        return {
+            "dos_from": norm,
+            "dos_to": norm,
+            "raw_date": raw,
+            "keyword": keyword,
+            "match_type": "regex",
+        }
+
+    date_outpatient_pattern = re.compile(
+        r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}[/-]\d{1,2}[/-]\d{1,2}|"
+        r"\d{1,2}\s+[A-Za-z]{3,9}\s*,?\s*\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},?\s*\d{2,4})"
+        r"\s*[-:]?\s*(outpatient|inpatient)\s*:?\b",
+        re.IGNORECASE,
+    )
+    match = date_outpatient_pattern.search(text)
+    if match:
+        raw_date = match.group(1)
+        norm = normalize_date(raw_date)
+        if norm and norm != "unknown":
+            return {
+                "dos_from": norm,
+                "dos_to": norm,
+                "raw_date": raw_date,
+                "keyword": match.group(2).title(),
+                "match_type": "date_outpatient_inpatient",
+            }
+    return None
+
+
+def extract_dos_range_with_llm(
+    page_text: str,
+    page_label: str,
+    client: Any,
+    reference_date: Optional[str] = None,
+    *,
+    discharge_like: bool = False,
+) -> Optional[tuple[str, str]]:
+    """
+    LLM DOS extract. Returns (dos_from, dos_to) in MM-DD-YYYY, or None.
+    For discharge-like notes, asks for admission/from and discharge/to.
+    """
+    if client is None or not page_text.strip():
+        return None
+
+    snippet = _slice_first_n_words(page_text, 120)
+    today_str = datetime.now().strftime("%m-%d-%Y")
+    mode = (
+        "This looks like a discharge / inpatient note. Extract BOTH "
+        "admission (DOS From) and discharge (DOS To) when present. "
+        "If only one visit date exists, set dos_to = dos_from."
+        if discharge_like
+        else "Extract the visit Date of Service. For a single-day visit, "
+        "set dos_to = dos_from. If a date range is explicit, use both ends."
+    )
+
+    prompt = f"""You are a STRICT medical document parser. Extract Date of Service From/To.
+
+{mode}
+
+CRITICAL RULES:
+1. Extract only explicit visit / admission / discharge / DOS labels — not labs, procedures, follow-ups, or narrative history.
+2. When in doubt, return NO_VISIT_DATE_FOUND.
+3. Dates must be MM-DD-YYYY (zero-padded).
+
+Respond with ONLY JSON (no markdown):
+{{"dos_from":"MM-DD-YYYY","dos_to":"MM-DD-YYYY"}}
+or
+{{"dos_from":null,"dos_to":null}}
+
+Today's date (year reference): {today_str}
+Reference date if helpful: {reference_date or "none"}
+
+Text excerpt:
+{snippet}
+"""
+
+    try:
+        response = client.chat.completions.create(
+            model=azure_deployment(),
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Extract clinical DOS from/to as JSON only. "
+                        "Prefer explicit labels. For discharge notes return both ends."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.0,
+            max_tokens=80,
+            timeout=30,
+        )
+        raw = (response.choices[0].message.content or "").strip()
+        raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        if "NO_VISIT_DATE_FOUND" in raw.upper() and "{" not in raw:
+            return None
+        data = json.loads(raw)
+        d_from = data.get("dos_from")
+        d_to = data.get("dos_to")
+        if not d_from:
+            return None
+        n_from = normalize_date(str(d_from), reference_date=reference_date)
+        if n_from == "unknown":
+            return None
+        if d_to:
+            n_to = normalize_date(str(d_to), reference_date=reference_date)
+            if n_to == "unknown":
+                n_to = n_from
+        else:
+            n_to = n_from
+        return n_from, n_to
+    except Exception as exc:
+        print(f"  [warn] LLM DOS failed on {page_label}: {exc}")
+        return None
+
+
+def split_ocr_into_pages(text: str) -> list[dict]:
+    ui_matches = list(UI_PAGE_MARKER_RE.finditer(text))
+    if ui_matches:
+        pages: list[dict] = []
+        for i, m in enumerate(ui_matches):
+            start = m.end()
+            end = ui_matches[i + 1].start() if i + 1 < len(ui_matches) else len(text)
+            pages.append(
+                {
+                    "index": i,
+                    "page": i + 1,
+                    "page_name": m.group(1).strip(),
+                    "start": start,
+                    "end": end,
+                }
+            )
+        return pages
+
+    ac_matches = list(AUTOCODER_PAGE_RE.finditer(text))
+    if ac_matches:
+        pages = []
+        for i, m in enumerate(ac_matches):
+            start = m.end()
+            end = ac_matches[i + 1].start() if i + 1 < len(ac_matches) else len(text)
+            pages.append(
+                {
+                    "index": i,
+                    "page": int(m.group(2)),
+                    "page_name": f"{int(m.group(2))}.jpg",
+                    "start": start,
+                    "end": end,
+                }
+            )
+        return pages
+
+    return [{"index": 0, "page": 1, "page_name": "1.jpg", "start": 0, "end": len(text)}]

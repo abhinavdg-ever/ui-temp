@@ -31,6 +31,7 @@ import {
 } from "./blobAuth";
 import BlobAuthModal from "./BlobAuthModal";
 import FullscreenPageChrome from "./FullscreenPageChrome";
+import { useImagePan } from "./useImagePan";
 import { usePageViewerHotkeys } from "./usePageViewerHotkeys";
 
 type Props = {
@@ -60,6 +61,17 @@ export default function FileViewer({ onBack, initialFolderId = null }: Props) {
   const [zoom, setZoom] = useState(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const pageStageRef = useRef<HTMLDivElement>(null);
+  const {
+    resetPan,
+    imageStyle,
+    stageProps,
+    stageClassName,
+  } = useImagePan(zoom, `${selectedId ?? ""}:${pageIndex}:${source}`);
+
+  function resetZoom() {
+    setZoom(1);
+    resetPan();
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -376,7 +388,7 @@ export default function FileViewer({ onBack, initialFolderId = null }: Props) {
                     <button
                       type="button"
                       className="zoom-reset"
-                      onClick={() => setZoom(1)}
+                      onClick={resetZoom}
                       title="Reset zoom"
                     >
                       {Math.round(zoom * 100)}%
@@ -406,7 +418,7 @@ export default function FileViewer({ onBack, initialFolderId = null }: Props) {
                       disabled={pageIndex <= 0}
                       onClick={() => {
                         setPageIndex((i) => Math.max(0, i - 1));
-                        setZoom(1);
+                        resetZoom();
                       }}
                       aria-label="Previous page"
                     >
@@ -420,7 +432,7 @@ export default function FileViewer({ onBack, initialFolderId = null }: Props) {
                       disabled={pageIndex >= pageCount - 1}
                       onClick={() => {
                         setPageIndex((i) => Math.min(pageCount - 1, i + 1));
-                        setZoom(1);
+                        resetZoom();
                       }}
                       aria-label="Next page"
                     >
@@ -432,14 +444,17 @@ export default function FileViewer({ onBack, initialFolderId = null }: Props) {
 
               <div className="file-viewer-stage-row">
                 <div
-                  className={`page-stage${isFullscreen ? " is-fullscreen" : ""}`}
+                  className={`page-stage${isFullscreen ? " is-fullscreen" : ""}${stageClassName ? ` ${stageClassName}` : ""}`}
                   ref={pageStageRef}
+                  {...stageProps}
                 >
                   {page ? (
                     <img
                       src={imageSrc(page.page_number, page.filename)}
                       alt={page.filename}
-                      style={{ transform: `scale(${zoom})`, transformOrigin: "center center" }}
+                      draggable={false}
+                      onPointerDown={stageProps.onPointerDown}
+                      style={imageStyle}
                     />
                   ) : (
                     <div className="ocr-empty">No page selected</div>
@@ -454,14 +469,14 @@ export default function FileViewer({ onBack, initialFolderId = null }: Props) {
                       label={page?.filename}
                       onZoomOut={() => zoomBy(-ZOOM_STEP)}
                       onZoomIn={() => zoomBy(ZOOM_STEP)}
-                      onZoomReset={() => setZoom(1)}
+                      onZoomReset={resetZoom}
                       onPrev={() => {
                         setPageIndex((i) => Math.max(0, i - 1));
-                        setZoom(1);
+                        resetZoom();
                       }}
                       onNext={() => {
                         setPageIndex((i) => Math.min(pageCount - 1, i + 1));
-                        setZoom(1);
+                        resetZoom();
                       }}
                       onExitFullscreen={exitFullscreen}
                     />

@@ -29,6 +29,7 @@ import {
 import ImagingPanel, { type ImagingTab } from "./ImagingPanel";
 import { ocrTextForFilename } from "./ocrPages";
 import FullscreenPageChrome from "./FullscreenPageChrome";
+import { useImagePan } from "./useImagePan";
 import { usePageViewerHotkeys } from "./usePageViewerHotkeys";
 
 type Props = {
@@ -106,6 +107,17 @@ export default function FolderViewer({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [outputExpanded, setOutputExpanded] = useState(false);
   const pageStageRef = useRef<HTMLDivElement>(null);
+  const {
+    resetPan,
+    imageStyle,
+    stageProps,
+    stageClassName,
+  } = useImagePan(zoom, `${folderId}:${pageIndex}`);
+
+  function resetZoom() {
+    setZoom(1);
+    resetPan();
+  }
 
   useEffect(() => {
     setOutputMode(initialMode);
@@ -409,7 +421,7 @@ export default function FolderViewer({
                   <button
                     type="button"
                     className="zoom-reset"
-                    onClick={() => setZoom(1)}
+                    onClick={resetZoom}
                     title="Reset zoom"
                   >
                     {Math.round(zoom * 100)}%
@@ -457,14 +469,17 @@ export default function FolderViewer({
               </div>
             </div>
             <div
-              className={`page-stage${isFullscreen ? " is-fullscreen" : ""}`}
+              className={`page-stage${isFullscreen ? " is-fullscreen" : ""}${stageClassName ? ` ${stageClassName}` : ""}`}
               ref={pageStageRef}
+              {...stageProps}
             >
               {page ? (
                 <img
                   src={pageImageUrl(folderId, page.page_number)}
                   alt={page.filename}
-                  style={{ transform: `scale(${zoom})`, transformOrigin: "center center" }}
+                  draggable={false}
+                  onPointerDown={stageProps.onPointerDown}
+                  style={imageStyle}
                 />
               ) : (
                 <div className="ocr-empty">
@@ -481,14 +496,14 @@ export default function FolderViewer({
                   label={page?.filename}
                   onZoomOut={() => zoomBy(-ZOOM_STEP)}
                   onZoomIn={() => zoomBy(ZOOM_STEP)}
-                  onZoomReset={() => setZoom(1)}
+                  onZoomReset={resetZoom}
                   onPrev={() => {
                     setPageIndex((i) => Math.max(0, i - 1));
-                    setZoom(1);
+                    resetZoom();
                   }}
                   onNext={() => {
                     setPageIndex((i) => Math.min(pageCount - 1, i + 1));
-                    setZoom(1);
+                    resetZoom();
                   }}
                   onExitFullscreen={exitFullscreen}
                 />
