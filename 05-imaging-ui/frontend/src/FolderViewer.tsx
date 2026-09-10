@@ -27,6 +27,12 @@ import {
   type OutputMode,
 } from "./api";
 import ImagingPanel, { type ImagingTab } from "./ImagingPanel";
+import {
+  formatMatchRatePercent,
+  isUsableOcrPayload,
+  matchRateTitle,
+  pageMatchRate,
+} from "./ocrMatchRate";
 import { ocrTextForFilename } from "./ocrPages";
 import FullscreenPageChrome from "./FullscreenPageChrome";
 import { useImagePan } from "./useImagePan";
@@ -64,14 +70,6 @@ function downloadJsonFile(filename: string, data: unknown) {
   downloadTextFile(filename, JSON.stringify(data, null, 2), "application/json;charset=utf-8");
 }
 
-function isUsableOcrText(text: string): boolean {
-  if (!text.trim()) return false;
-  if (text.startsWith("No ")) return false;
-  if (text === "OCR unavailable") return false;
-  if (text.startsWith("No OCR text found")) return false;
-  return true;
-}
-
 function findImagingPage(
   doc: ImagingDocumentResponse | null,
   page: { page_number: number; filename: string } | null,
@@ -95,7 +93,7 @@ export default function FolderViewer({
   const [outputMode, setOutputMode] = useState<OutputMode>(initialMode);
   const [ocrTab, setOcrTab] = useState<OcrKind>("preliminary");
   const [imagingTab, setImagingTab] = useState<ImagingTab>("page");
-  const [ocrFullText, setOcrFullText] = useState("");
+  const [ocrByKind, setOcrByKind] = useState<Partial<Record<OcrKind, string>>>({});
   const [imagingDoc, setImagingDoc] = useState<ImagingDocumentResponse | null>(null);
   const [loadingFolder, setLoadingFolder] = useState(true);
   const [loadingOcr, setLoadingOcr] = useState(false);
@@ -131,6 +129,7 @@ export default function FolderViewer({
     setOcrTab("preliminary");
     setImagingTab("page");
     setImagingDoc(null);
+    setOcrByKind({});
     setZoom(1);
     getFolder(folderId)
       .then((data) => {
@@ -161,33 +160,43 @@ export default function FolderViewer({
 
   useEffect(() => {
     if (!folder || outputMode !== "ocr") {
-      setOcrFullText("");
+      setOcrByKind({});
       return;
     }
     let cancelled = false;
     setLoadingOcr(true);
-    setOcrFullText("");
+    setOcrByKind({});
     setCopied(false);
-    getFolderOcr(folder.id, ocrTab)
-      .then((data) => {
-        if (!cancelled) setOcrFullText(data.text);
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setOcrFullText(
-            err instanceof Error
-              ? `No ${OCR_TAB_LABELS[ocrTab]} available.\n\n${err.message}`
-              : "OCR unavailable",
-          );
+
+    Promise.all(
+      OCR_TABS.map(async (kind) => {
+        try {
+          const data = await getFolderOcr(folder.id, kind);
+          return [kind, data.text] as const;
+        } catch {
+          return [kind, ""] as const;
         }
+      }),
+    )
+      .then((entries) => {
+        if (cancelled) return;
+        const next: Partial<Record<OcrKind, string>> = {};
+        for (const [kind, text] of entries) {
+          if (text.trim()) next[kind] = text;
+        }
+        setOcrByKind(next);
       })
       .finally(() => {
         if (!cancelled) setLoadingOcr(false);
       });
+
     return () => {
       cancelled = true;
     };
-  }, [folder, ocrTab, outputMode]);
+  }, [folder, outputMode]);
+
+  const ocrFullText = ocrByKind[ocrTab] ?? "";
+  const ocrMissingMessage = `No ${OCR_TAB_LABELS[ocrTab]} available.`;
 
   useEffect(() => {
     if (!folder || outputMode !== "imaging") {
@@ -217,20 +226,27 @@ export default function FolderViewer({
   }, [folder, outputMode]);
 
   const pageOcrText = useMemo(() => {
-    if (!ocrFullText || !page) return "";
-    if (ocrFullText.startsWith("No ") || ocrFullText === "OCR unavailable") {
-      return ocrFullText;
-    }
+    if (loadingOcr) return "";
+    if (!page) return "";
+    if (!ocrFullText) return ocrMissingMessage;
+    if (!isUsableOcrPayload(ocrFullText)) return ocrFullText;
     const chunk = ocrTextForFilename(ocrFullText, page.filename);
     return chunk || `No OCR text found for ${page.filename}.`;
-  }, [ocrFullText, page]);
+  }, [loadingOcr, ocrFullText, ocrMissingMessage, page]);
+
+  const ocrMatch = useMemo(() => {
+    if (!page) {
+      return { rate: null, count: 0, engines: [], pairs: [] };
+    }
+    return pageMatchRate(ocrByKind, page.filename, OCR_TABS);
+  }, [ocrByKind, page]);
 
   const imagingPage = useMemo(
     () => findImagingPage(imagingDoc, page),
     [imagingDoc, page],
   );
 
-  const canUseFull = isUsableOcrText(ocrFullText);
+  const canUseFull = isUsableOcrPayload(ocrFullText);
   const pageCount = folder?.pages.length ?? 0;
   const folderName = folder?.name ?? folderId;
   const suffix = KIND_FILE_SUFFIX[ocrTab];
@@ -275,8 +291,11 @@ export default function FolderViewer({
       "tiltAngle",
       "mirrored",
       "pageQualityConfidence",
-      "dos",
+      "dosFrom",
+      "dosTo",
       "dosConfidence",
+      "docDosFrom",
+      "docDosTo",
       "pageType",
       "pageTypeConfidence",
       "manifestMember",
@@ -302,8 +321,11 @@ export default function FolderViewer({
         p.tiltAngle,
         p.mirrored,
         p.pageQualityConfidence,
-        p.dos,
+        p.dosFrom,
+        p.dosTo,
         p.dosConfidence,
+        p.docDosFrom ?? "",
+        p.docDosTo ?? "",
         p.pageType,
         p.pageTypeConfidence,
         m?.member ?? "",
@@ -569,19 +591,42 @@ export default function FolderViewer({
                 </h2>
               </div>
               {outputMode === "ocr" && (
-                <div className="output-tabs" role="tablist" aria-label="OCR views">
-                  {OCR_TABS.map((kind) => (
-                    <button
-                      key={kind}
-                      type="button"
-                      role="tab"
-                      aria-selected={ocrTab === kind}
-                      className={ocrTab === kind ? "active" : ""}
-                      onClick={() => setOcrTab(kind)}
-                    >
-                      {OCR_TAB_LABELS[kind]}
-                    </button>
-                  ))}
+                <div className="ocr-toolbar-row">
+                  <div className="output-tabs" role="tablist" aria-label="OCR views">
+                    {OCR_TABS.map((kind) => (
+                      <button
+                        key={kind}
+                        type="button"
+                        role="tab"
+                        aria-selected={ocrTab === kind}
+                        className={ocrTab === kind ? "active" : ""}
+                        onClick={() => setOcrTab(kind)}
+                        disabled={loadingOcr ? false : !ocrByKind[kind]}
+                        title={
+                          ocrByKind[kind]
+                            ? OCR_TAB_LABELS[kind]
+                            : `${OCR_TAB_LABELS[kind]} unavailable`
+                        }
+                      >
+                        {OCR_TAB_LABELS[kind]}
+                      </button>
+                    ))}
+                  </div>
+                  <div
+                    className={`ocr-match-rate${ocrMatch.rate === null ? " is-na" : ""}`}
+                    title={matchRateTitle(ocrMatch)}
+                    aria-label={`OCR match rate ${formatMatchRatePercent(ocrMatch.rate)}`}
+                  >
+                    <span className="ocr-match-label">Match rate</span>
+                    <span className="ocr-match-value">
+                      {loadingOcr ? "…" : formatMatchRatePercent(ocrMatch.rate)}
+                    </span>
+                    {!loadingOcr && ocrMatch.engines.length > 0 ? (
+                      <span className="ocr-match-engines">
+                        {ocrMatch.engines.join(" · ")}
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
               )}
               {outputMode === "imaging" && (

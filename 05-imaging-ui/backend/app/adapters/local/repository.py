@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import csv
 import json
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,98 @@ def _page_num_from_name(name: str) -> int | None:
     if not match:
         return None
     return int(match.group(1))
+
+
+def _fmt_dos_display(raw: str | date | None) -> str | None:
+    """Normalize dates to MM/DD/YYYY for the Imaging UI."""
+    if raw is None:
+        return None
+    if isinstance(raw, date):
+        return raw.strftime("%m/%d/%Y")
+    value = str(raw).strip()
+    if not value or value.lower() in {"unknown", "null", "none"}:
+        return None
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y", "%m/%d/%y", "%m-%d-%y"):
+        try:
+            return datetime.strptime(value, fmt).strftime("%m/%d/%Y")
+        except ValueError:
+            continue
+    return value
+
+
+def _dos_row_fields(row: dict[str, str]) -> dict[str, str | None]:
+    dos_from = _fmt_dos_display(row.get("dos_from_iso") or row.get("dos_from") or row.get("dos"))
+    dos_to = _fmt_dos_display(row.get("dos_to_iso") or row.get("dos_to") or "")
+    if dos_from and not dos_to and (row.get("dos_from") or row.get("dos_from_iso") or row.get("dos")):
+        dos_to = dos_from
+    return {
+        "dosFrom": dos_from,
+        "dosTo": dos_to,
+        "docDosFrom": _fmt_dos_display(
+            row.get("doc_dos_from_iso") or row.get("doc_dos_from") or ""
+        ),
+        "docDosTo": _fmt_dos_display(row.get("doc_dos_to_iso") or row.get("doc_dos_to") or ""),
+    }
+
+
+def _read_dos_csv_rows(path: Path) -> list[dict[str, str]]:
+    if not path.is_file() or path.stat().st_size == 0:
+        return []
+    with path.open(newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        rows: list[dict[str, str]] = []
+        for raw in reader:
+            row = {(k or "").strip(): (v or "").strip() for k, v in raw.items() if k is not None}
+            if row:
+                rows.append(row)
+        return rows
+
+
+def _index_dos_rows(rows: list[dict[str, str]], chart_name: str) -> dict[str, dict[str, str | None]]:
+    """Map page filename / page number → DOS fields for one chart."""
+    by_key: dict[str, dict[str, str | None]] = {}
+    for row in rows:
+        cname = (row.get("chart_name") or chart_name).strip()
+        if cname and cname != chart_name:
+            continue
+        fields = _dos_row_fields(row)
+        page_name = (row.get("page_name") or "").strip()
+        if page_name:
+            by_key[page_name.lower()] = fields
+            by_key[Path(page_name).name.lower()] = fields
+        raw_num = (row.get("page_number") or "").strip()
+        if raw_num.isdigit():
+            by_key[f"#{raw_num}"] = fields
+    return by_key
+
+
+def _overlay_dos_on_pages(
+    pages: list[ImagingPageResult],
+    dos_by_key: dict[str, dict[str, str | None]],
+) -> list[ImagingPageResult]:
+    if not dos_by_key:
+        return pages
+    out: list[ImagingPageResult] = []
+    for page in pages:
+        hit = (
+            dos_by_key.get(page.fileName.lower())
+            or dos_by_key.get(Path(page.fileName).name.lower())
+            or dos_by_key.get(f"#{page.pageNumber}")
+        )
+        if not hit:
+            out.append(page)
+            continue
+        out.append(
+            page.model_copy(
+                update={
+                    "dosFrom": hit.get("dosFrom"),
+                    "dosTo": hit.get("dosTo"),
+                    "docDosFrom": hit.get("docDosFrom"),
+                    "docDosTo": hit.get("docDosTo"),
+                }
+            )
+        )
+    return out
 
 
 def _mtime(path: Path) -> datetime | None:
@@ -218,8 +311,11 @@ class LocalFolderRepository(FolderRepository):
                     tiltAngle=round(0.8 + idx * 0.1, 2),
                     mirrored=False,
                     pageQualityConfidence=round(0.94 - idx * 0.02, 2),
-                    dos="01/03/2024" if idx % 2 == 0 else "01/04/2024",
+                    dosFrom="01/03/2024" if idx % 2 == 0 else "01/04/2024",
+                    dosTo="01/03/2024" if idx % 2 == 0 else "01/05/2024",
                     dosConfidence=round(0.9 - idx * 0.03, 2),
+                    docDosFrom="01/03/2024" if idx % 2 == 0 else "01/04/2024",
+                    docDosTo="01/03/2024" if idx % 2 == 0 else "01/05/2024",
                     pageType="Daily Note" if idx % 2 == 0 else "Progress Note",
                     pageTypeConfidence=round(0.88 - idx * 0.02, 2),
                 )
@@ -422,8 +518,38 @@ class LocalFolderRepository(FolderRepository):
 
         return OcrTextResponse(folder_id=folder_id, kind=normalized, text=text)
 
+    def _dos_overlay_for_folder(self, folder_dir: Path) -> dict[str, dict[str, str | None]]:
+        """Prefer imaging/<chart>_dos.csv, else combined dos_extraction.csv for this chart."""
+        chart = folder_dir.name
+        per_chart = folder_dir / "imaging" / f"{chart}_dos.csv"
+        rows = _read_dos_csv_rows(per_chart)
+        if not rows:
+            # monorepo: …/05-imaging-ui/data/folders → …/02-imaging-pipeline/…
+            combined = (
+                self.data_root.parent.parent.parent
+                / "02-imaging-pipeline"
+                / "dos-extraction"
+                / "output"
+                / "dos_extraction.csv"
+            )
+            # nested layout fallback: imaging-ui repo without numbered packs
+            if not combined.is_file():
+                combined = (
+                    self.data_root.parent.parent
+                    / "02-imaging-pipeline"
+                    / "dos-extraction"
+                    / "output"
+                    / "dos_extraction.csv"
+                )
+            rows = [
+                r
+                for r in _read_dos_csv_rows(combined)
+                if (r.get("chart_name") or "").strip() == chart
+            ]
+        return _index_dos_rows(rows, chart)
+
     def get_imaging(self, folder_id: str) -> ImagingDocumentResponse:
-        """Load imaging JSON, or synthesize dummy page rows if missing (pre-Postgres)."""
+        """Load imaging JSON / dummy pages; overlay DOS From/To from DOS CSV when present."""
         folder_dir = self._folder_dir(folder_id)
         pages = self._page_files(folder_dir)
         path = self._imaging_path(folder_dir)
@@ -436,15 +562,17 @@ class LocalFolderRepository(FolderRepository):
                     status_code=422,
                     detail=f"Invalid imaging JSON in {path.name}: {exc}",
                 ) from exc
-            return ImagingDocumentResponse(
-                folder_id=folder_id,
-                manifest=self._parse_imaging_manifest(data, folder_id),
-                pages=self._parse_imaging_pages(data, folder_dir),
-            )
+            imaging_pages = self._parse_imaging_pages(data, folder_dir)
+            manifest = self._parse_imaging_manifest(data, folder_id)
+        else:
+            imaging_pages = self._dummy_imaging_pages(folder_dir, pages)
+            manifest = self._manifest_for_folder(folder_id)
 
-        # Backup: always return dummy values so Imaging UI works before Postgres
+        imaging_pages = _overlay_dos_on_pages(
+            imaging_pages, self._dos_overlay_for_folder(folder_dir)
+        )
         return ImagingDocumentResponse(
             folder_id=folder_id,
-            manifest=self._manifest_for_folder(folder_id),
-            pages=self._dummy_imaging_pages(folder_dir, pages),
+            manifest=manifest,
+            pages=imaging_pages,
         )

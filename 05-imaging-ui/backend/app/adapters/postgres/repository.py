@@ -12,7 +12,7 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from app.adapters.base import FolderRepository
-from app.adapters.local.repository import LocalFolderRepository, _normalize_kind
+from app.adapters.local.repository import LocalFolderRepository, _fmt_dos_display, _normalize_kind, _overlay_dos_on_pages
 from app.core.schemas import (
     FolderDetail,
     FolderSummary,
@@ -223,15 +223,60 @@ class PostgresFolderRepository(FolderRepository):
             memberId=member_id,
         )
 
+    def _dos_from_db(self, folder_id: str) -> dict[str, dict[str, str | None]] | None:
+        """page_name / #page_number → DOS fields from dos_extraction_results."""
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT p.page_name, d.dos_from, d.dos_to, d.doc_dos_from, d.doc_dos_to
+                        FROM dos_extraction_results d
+                        JOIN page_list p ON p.id = d.page_id
+                        JOIN chart_list c ON c.id = d.chart_id
+                        WHERE c.chart_name = %s
+                        """,
+                        (folder_id,),
+                    )
+                    rows = cur.fetchall()
+        except Exception:
+            return None
+
+        if not rows:
+            return None
+
+        by_key: dict[str, dict[str, str | None]] = {}
+        for page_name, dos_from, dos_to, doc_from, doc_to in rows:
+            fields = {
+                "dosFrom": _fmt_dos_display(dos_from),
+                "dosTo": _fmt_dos_display(dos_to),
+                "docDosFrom": _fmt_dos_display(doc_from),
+                "docDosTo": _fmt_dos_display(doc_to),
+            }
+            pname = str(page_name)
+            by_key[pname.lower()] = fields
+            stem = Path(pname).stem
+            if stem.isdigit():
+                by_key[f"#{stem}"] = fields
+        return by_key
+
     def get_imaging(self, folder_id: str) -> ImagingDocumentResponse:
-        """Pages from local imaging JSON/dummy; manifest from Postgres."""
+        """Pages from local imaging JSON/dummy; manifest + DOS from Postgres when present."""
         local = self._require_local()
         doc = local.get_imaging(folder_id)
         db_manifest = self._manifest_from_db(folder_id)
+        pages = doc.pages
+        dos_map = self._dos_from_db(folder_id)
+        if dos_map:
+            pages = _overlay_dos_on_pages(pages, dos_map)
         if db_manifest is not None:
             return ImagingDocumentResponse(
                 folder_id=doc.folder_id,
                 manifest=db_manifest,
-                pages=doc.pages,
+                pages=pages,
             )
-        return doc
+        return ImagingDocumentResponse(
+            folder_id=doc.folder_id,
+            manifest=doc.manifest,
+            pages=pages,
+        )

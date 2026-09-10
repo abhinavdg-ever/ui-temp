@@ -30,7 +30,7 @@ The insert script auto-detects this layout and loads `DATABASE_URL` from `05-ima
 | `chart_list` / `page_list` | `05-imaging-ui/data/folders/<chart>/pages` | `db-insert-scripts/load_from_folders.py` |
 | `manifest_member_list` | `06-postgres-db/manifest/metadata_R*_B*.csv` | `load_from_folders.py` |
 | `ocr_results` | `ocr/*_prelim` / `*_final1` / `*_final2` | `load_from_folders.py` |
-| **`dos_extraction_results`** | **`02-imaging-pipeline/dos-extraction/output/dos_extraction.csv`** | Insert from DOS CSV (after charts/pages exist) |
+| **`dos_extraction_results`** | **`02-imaging-pipeline/dos-extraction/output/dos_extraction.csv`** | `db-insert-scripts/load_dos_csv.py` (skips if no CSV) |
 
 ## `dos_extraction_results` ← DOS CSV
 
@@ -62,7 +62,13 @@ chart_name,page_name,page_number,dos_from,dos_to,dos_from_iso,dos_to_iso,doc_dos
 
 1. `load_from_folders.py` → charts, pages, manifest, OCR  
 2. `extract_dos.py` → `dos_extraction.csv`  
-3. Load CSV → `INSERT` into `dos_extraction_results` (`dos_from`, `dos_to`, `doc_dos_from`, `doc_dos_to`)
+3. `load_dos_csv.py` → `dos_extraction_results` (exit 0 / skip if CSV missing)
+
+```bat
+cd 06-postgres-db\db-insert-scripts
+python load_dos_csv.py
+REM optional: python load_dos_csv.py --per-chart
+```
 
 ## Quick start (Windows monorepo)
 
@@ -75,7 +81,9 @@ python load_from_folders.py
 
 cd "..\..\02-imaging-pipeline\dos-extraction"
 python extract_dos.py
-REM Then load output\dos_extraction.csv → dos_extraction_results
+
+cd "..\..\06-postgres-db\db-insert-scripts"
+python load_dos_csv.py
 ```
 
 Uses `DATABASE_URL` from `05-imaging-ui\.env` (e.g. `…@172.20.4.170/imaging_outputs`).

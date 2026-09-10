@@ -972,6 +972,72 @@ input {
   font-size: 0.82rem;
 }
 
+.ocr-toolbar-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  flex: 1 1 100%;
+  width: 100%;
+  margin-top: 0.35rem;
+  padding: 0;
+  background: transparent;
+  border: none;
+}
+
+.ocr-toolbar-row .output-tabs {
+  padding: 0;
+  border-bottom: none;
+  background: transparent;
+  flex: 1 1 auto;
+}
+
+.ocr-match-rate {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  flex-shrink: 0;
+  padding: 0.28rem 0.55rem;
+  border: 1px solid var(--brand-200, #b7d4c4);
+  border-radius: 7px;
+  background: var(--card);
+  font-size: 0.78rem;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.ocr-match-rate.is-na {
+  border-color: var(--border);
+  color: var(--muted);
+}
+
+.ocr-match-label {
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.ocr-match-value {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--brand-800, #1a5c3a);
+}
+
+.ocr-match-rate.is-na .ocr-match-value {
+  color: var(--muted);
+}
+
+.ocr-match-engines {
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.output-tabs button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .ocr-download-group {
   display: none;
 }

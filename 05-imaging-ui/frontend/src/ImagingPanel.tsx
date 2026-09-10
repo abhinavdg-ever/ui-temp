@@ -147,8 +147,13 @@ function PageDetails({ page }: { page: ImagingPageResult }) {
         showConfidence
         rows={[
           {
-            label: "DOS",
-            value: fmt(page.dos),
+            label: "DOS From",
+            value: fmt(page.dosFrom),
+            confidence: fmtConfidence(page.dosConfidence),
+          },
+          {
+            label: "DOS To",
+            value: fmt(page.dosTo),
             confidence: fmtConfidence(page.dosConfidence),
           },
         ]}
@@ -205,7 +210,8 @@ function DocSummary({ pages }: { pages: ImagingPageResult[] }) {
             <th scope="col">Orient.</th>
             <th scope="col">Tilt</th>
             <th scope="col">Mirrored</th>
-            <th scope="col">DOS</th>
+            <th scope="col">DOS From</th>
+            <th scope="col">DOS To</th>
             <th scope="col">Page Type</th>
             {showConfidence ? (
               <>
@@ -229,7 +235,8 @@ function DocSummary({ pages }: { pages: ImagingPageResult[] }) {
               <td>{fmt(p.orientationAngle)}</td>
               <td>{fmt(p.tiltAngle)}</td>
               <td>{fmt(p.mirrored)}</td>
-              <td>{fmt(p.dos)}</td>
+              <td>{fmt(p.dosFrom)}</td>
+              <td>{fmt(p.dosTo)}</td>
               <td>{fmt(p.pageType)}</td>
               {showConfidence ? (
                 <>

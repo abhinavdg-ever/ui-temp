@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 OcrKind = Literal["preliminary", "final1", "final2"]
 OcrRunStatus = Literal["QUEUED", "IN_PROGRESS", "COMPLETED", "FAILED"]
@@ -59,10 +59,26 @@ class ImagingPageResult(BaseModel):
     tiltAngle: float | None = None
     mirrored: bool | None = None
     pageQualityConfidence: float | None = None
-    dos: str | None = None
+    dosFrom: str | None = None
+    dosTo: str | None = None
     dosConfidence: float | None = None
+    docDosFrom: str | None = None
+    docDosTo: str | None = None
     pageType: str | None = None
     pageTypeConfidence: float | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_single_dos(cls, data: Any) -> Any:
+        """Accept older imaging JSON with a single `dos` field."""
+        if not isinstance(data, dict):
+            return data
+        out = dict(data)
+        legacy = out.get("dos")
+        if legacy and not out.get("dosFrom") and not out.get("dosTo"):
+            out["dosFrom"] = legacy
+            out["dosTo"] = legacy
+        return out
 
 
 class ImagingManifestDetails(BaseModel):

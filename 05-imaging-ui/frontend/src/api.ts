@@ -47,8 +47,11 @@ export type ImagingPageResult = {
   tiltAngle: number | null;
   mirrored: boolean | null;
   pageQualityConfidence: number | null;
-  dos: string | null;
+  dosFrom: string | null;
+  dosTo: string | null;
   dosConfidence: number | null;
+  docDosFrom?: string | null;
+  docDosTo?: string | null;
   pageType: string | null;
   pageTypeConfidence: number | null;
 };
