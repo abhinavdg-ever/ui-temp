@@ -184,7 +184,7 @@ def main() -> None:
                     "page_name": path.name,
                     "page_number": str(num),
                     "handwritten_or_printed": label,
-                    "confidence": "" if conf is None else f"{conf:.4f}",
+                    "confidence": "NA" if conf is None else f"{conf:.4f}",
                     "method": method,
                 }
             )

@@ -130,8 +130,8 @@ def preprocess_for_classify(image: Image.Image) -> bytes:
     return buf.getvalue()
 
 
-def extract_ocr_features(image_bytes: bytes) -> list[float]:
-    """Same feature vector used to train image_type_classification.pkl."""
+def extract_ocr_features(image_bytes: bytes) -> tuple[list[float], int]:
+    """Return (feature vector, word_count) used by image_type_classification.pkl."""
     try:
         import pytesseract
     except ImportError as exc:
@@ -145,12 +145,14 @@ def extract_ocr_features(image_bytes: bytes) -> list[float]:
         confs = [int(c) for c in ocr_data["conf"] if str(c) != "-1"]
         avg_conf = float(np.mean(confs)) if confs else 0.0
         std_conf = float(np.std(confs)) if confs else 0.0
-        text = " ".join(ocr_data["text"]).strip()
+        tokens = [str(t).strip() for t in ocr_data["text"] if str(t).strip()]
+        word_count = len(tokens)
+        text = " ".join(tokens)
         text_len = float(len(text))
         space_ratio = text.count(" ") / (len(text) + 1)
-        return [avg_conf, std_conf, text_len, space_ratio]
+        return [avg_conf, std_conf, text_len, space_ratio], word_count
     except Exception:
-        return [0.0, 0.0, 0.0, 0.0]
+        return [0.0, 0.0, 0.0, 0.0], 0
 
 
 def classify_image_type(
@@ -161,8 +163,9 @@ def classify_image_type(
 ) -> tuple[str, float | None, str]:
     """
     Returns (label, confidence, method).
-    label: \"Handwritten\" | \"Printed\"
-    method: \"ml\" | \"heuristic\"
+    label: \"Handwritten\" | \"Printed\" | \"NA\"
+    confidence: float 0–1, or None when not calculated (UI shows NA)
+    method: \"ml\" | \"heuristic\" | \"empty\"
     """
     if not already_preprocessed:
         try:
@@ -174,29 +177,24 @@ def classify_image_type(
     if rf is None:
         rf = load_model()
 
+    feats, word_count = extract_ocr_features(image_bytes)
+    if word_count == 0:
+        # Blank / no OCR text — do not force Printed or Handwritten
+        return "NA", None, "empty"
+
     if rf is None:
-        try:
-            import pytesseract
-
-            img = Image.open(io.BytesIO(image_bytes))
-            ocr_data = pytesseract.image_to_data(
-                img, output_type=pytesseract.Output.DICT
-            )
-            confs = [int(c) for c in ocr_data["conf"] if str(c) != "-1"]
-            avg_conf = float(np.mean(confs)) if confs else 0.0
-        except Exception:
-            avg_conf = 0.0
+        avg_conf = feats[0]
         label = "Handwritten" if avg_conf < 50 else "Printed"
-        conf = max(0.0, min(1.0, abs(avg_conf - 50) / 50.0))
-        return label, round(conf, 4), "heuristic"
+        # Heuristic has no calibrated probability → leave confidence unset (NA)
+        return label, None, "heuristic"
 
-    feats = np.array(extract_ocr_features(image_bytes), dtype=float).reshape(1, -1)
-    pred = int(rf.predict(feats)[0])
+    feat_arr = np.array(feats, dtype=float).reshape(1, -1)
+    pred = int(rf.predict(feat_arr)[0])
     label = "Handwritten" if pred == 0 else "Printed"
     conf: float | None = None
     if hasattr(rf, "predict_proba"):
         try:
-            proba = rf.predict_proba(feats)[0]
+            proba = rf.predict_proba(feat_arr)[0]
             conf = float(max(proba))
         except Exception:
             conf = None

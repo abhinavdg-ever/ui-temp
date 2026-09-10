@@ -380,7 +380,7 @@ class LocalFolderRepository(FolderRepository):
                 per_chart_name=f"{chart}_member_extraction.csv",
                 combined_rel=(
                     "02-imaging-pipeline",
-                    "member-extraction",
+                    "member-verification",
                     "output",
                     "member_extraction_results.csv",
                 ),
@@ -762,7 +762,7 @@ class LocalFolderRepository(FolderRepository):
                     per_chart_name=f"{chart}_member_extraction.csv",
                     combined_rel=(
                         "02-imaging-pipeline",
-                        "member-extraction",
+                        "member-verification",
                         "output",
                         "member_extraction_results.csv",
                     ),

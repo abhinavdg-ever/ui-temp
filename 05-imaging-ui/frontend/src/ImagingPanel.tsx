@@ -27,7 +27,7 @@ function fmt(value: string | number | boolean | null | undefined): string {
 }
 
 function fmtConfidence(value: number | null | undefined): string {
-  if (value === null || value === undefined) return "—";
+  if (value === null || value === undefined) return "NA";
   if (value <= 1) return `${Math.round(value * 100)}%`;
   return `${value}%`;
 }

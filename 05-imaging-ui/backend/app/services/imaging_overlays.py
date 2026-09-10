@@ -4,7 +4,7 @@ Sources (monorepo packs under repo root next to 05-imaging-ui):
   01-ocr-extraction/output/hw_printed.csv
   02-imaging-pipeline/dos-extraction/output/dos_extraction.csv
   02-imaging-pipeline/rotation-orientation/output/rotation.csv
-  02-imaging-pipeline/member-extraction/output/member_extraction_results.csv
+  02-imaging-pipeline/member-verification/output/member_extraction_results.csv
   02-imaging-pipeline/member-verification/output/member_verification_summary.csv
 
 Per-chart overrides under data/folders/<chart>/imaging/ are preferred when present.

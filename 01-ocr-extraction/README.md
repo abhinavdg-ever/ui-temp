@@ -36,7 +36,7 @@ chart_name,page_name,page_number,handwritten_or_printed,confidence,method
 
 Preprocess (same as autocoder): crop top 5% + bottom 2.5%, Sauvola binarize, then classify.
 
-`method` is `ml` when the `.pkl` loads, else `heuristic` (avg Tesseract conf &lt; 50 → Handwritten).
+`method` is `ml` when the `.pkl` loads, `heuristic` without model, or `empty` when OCR has **0 words** (label=`NA`, confidence=`NA`).
 
 ## Imaging UI
 
