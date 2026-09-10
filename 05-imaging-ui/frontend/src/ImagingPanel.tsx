@@ -241,8 +241,8 @@ function RejectionRulesTable({
         <tr>
           <th scope="col">Status</th>
           <th scope="col">Matched Name</th>
-          <th scope="col">Pages Matched</th>
-          <th scope="col">Confidence</th>
+          <th scope="col">Pages</th>
+          <th scope="col">Conf.</th>
           <th scope="col">Decision Reason</th>
         </tr>
       </thead>
