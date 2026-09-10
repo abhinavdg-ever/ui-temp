@@ -1455,7 +1455,7 @@ input {
 
 .imaging-rejection-table th:nth-child(1),
 .imaging-rejection-table td:nth-child(1) {
-  width: 12%;
+  width: 11%;
 }
 
 .imaging-rejection-table th:nth-child(2),
@@ -1465,18 +1465,20 @@ input {
 
 .imaging-rejection-table th:nth-child(3),
 .imaging-rejection-table td:nth-child(3) {
-  width: 12%;
+  width: 8%;
+  white-space: nowrap;
 }
 
 .imaging-rejection-table th:nth-child(4),
 .imaging-rejection-table td:nth-child(4) {
-  width: 12%;
+  width: 8%;
+  white-space: nowrap;
 }
 
 .imaging-rejection-table th:nth-child(5),
 .imaging-rejection-table td:nth-child(5),
 .imaging-decision-reason {
-  width: 46%;
+  width: 55%;
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: break-word;

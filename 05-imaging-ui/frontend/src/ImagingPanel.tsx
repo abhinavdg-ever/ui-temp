@@ -64,8 +64,8 @@ function fmt(value: string | number | boolean | null | undefined): string {
 
 function fmtConfidence(value: number | null | undefined): string {
   if (value === null || value === undefined) return "NA";
-  if (value <= 1) return `${Math.round(value * 100)}%`;
-  return `${value}%`;
+  const pct = value <= 1 ? value * 100 : value;
+  return `${pct.toFixed(1)}%`;
 }
 
 function fmtPagesMatched(v: ImagingVerificationDetails): string {
