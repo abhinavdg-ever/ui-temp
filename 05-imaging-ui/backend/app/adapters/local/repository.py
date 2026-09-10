@@ -283,6 +283,7 @@ class LocalFolderRepository(FolderRepository):
     def __init__(self, data_root: Path, metadata_root: Path | None = None):
         self.data_root = data_root
         self.metadata_root = metadata_root
+        self._overlay_chart_ids: set[str] | None = None
 
     def _folder_dir(self, folder_id: str) -> Path:
         if "/" in folder_id or "\\" in folder_id or folder_id in (".", ".."):
@@ -319,8 +320,46 @@ class LocalFolderRepository(FolderRepository):
     def _imaging_path(self, folder_dir: Path) -> Path:
         return folder_dir / "imaging" / f"{folder_dir.name}_imaging.json"
 
+    def _overlay_chart_id_set(self) -> set[str]:
+        """Chart ids that appear in any combined pipeline CSV (cached once)."""
+        if self._overlay_chart_ids is not None:
+            return self._overlay_chart_ids
+
+        from app.services.imaging_overlays import (
+            chart_id_key,
+            monorepo_root_from_data,
+            read_csv_rows,
+        )
+
+        ids: set[str] = set()
+        root = monorepo_root_from_data(self.data_root)
+        combined_files = [
+            root / "02-imaging-pipeline" / "dos-extraction" / "output" / "dos_extraction.csv",
+            root / "01-ocr-extraction" / "output" / "hw_printed.csv",
+            root / "02-imaging-pipeline" / "rotation-orientation" / "output" / "rotation.csv",
+            root
+            / "02-imaging-pipeline"
+            / "member-verification"
+            / "output"
+            / "member_extraction_results.csv",
+            root
+            / "02-imaging-pipeline"
+            / "member-verification"
+            / "output"
+            / "member_verification_summary.csv",
+        ]
+        for path in combined_files:
+            for row in read_csv_rows(path):
+                for col in ("chart_name", "folder", "chart_id"):
+                    val = (row.get(col) or "").strip()
+                    if val:
+                        ids.add(val)
+                        ids.add(chart_id_key(val))
+        self._overlay_chart_ids = ids
+        return ids
+
     def _has_imaging(self, folder_dir: Path) -> bool:
-        """True if imaging JSON or any pipeline CSV overlay exists for this chart."""
+        """Cheap check for History listing — no per-folder full CSV scans."""
         path = self._imaging_path(folder_dir)
         try:
             if path.is_file() and path.stat().st_size > 0:
@@ -329,65 +368,21 @@ class LocalFolderRepository(FolderRepository):
             pass
         imaging_dir = folder_dir / "imaging"
         if imaging_dir.is_dir():
-            for name in (
-                f"{folder_dir.name}_dos.csv",
-                f"{folder_dir.name}_hw_printed.csv",
-                f"{folder_dir.name}_rotation.csv",
-                f"{folder_dir.name}_member_extraction.csv",
-            ):
-                p = imaging_dir / name
-                if p.is_file() and p.stat().st_size > 0:
+            for entry in imaging_dir.iterdir():
+                if (
+                    entry.is_file()
+                    and not entry.name.startswith("._")
+                    and entry.suffix.lower() in {".csv", ".json"}
+                    and entry.stat().st_size > 0
+                ):
                     return True
-        # Combined pack outputs (header-only files don't count as "has imaging")
-        from app.services.imaging_overlays import collect_rows
-
         chart = folder_dir.name
-        checks = [
-            collect_rows(
-                folder_dir=folder_dir,
-                data_root=self.data_root,
-                per_chart_name=f"{chart}_dos.csv",
-                combined_rel=(
-                    "02-imaging-pipeline",
-                    "dos-extraction",
-                    "output",
-                    "dos_extraction.csv",
-                ),
-                chart_name=chart,
-            ),
-            collect_rows(
-                folder_dir=folder_dir,
-                data_root=self.data_root,
-                per_chart_name=f"{chart}_hw_printed.csv",
-                combined_rel=("01-ocr-extraction", "output", "hw_printed.csv"),
-                chart_name=chart,
-            ),
-            collect_rows(
-                folder_dir=folder_dir,
-                data_root=self.data_root,
-                per_chart_name=f"{chart}_rotation.csv",
-                combined_rel=(
-                    "02-imaging-pipeline",
-                    "rotation-orientation",
-                    "output",
-                    "rotation.csv",
-                ),
-                chart_name=chart,
-            ),
-            collect_rows(
-                folder_dir=folder_dir,
-                data_root=self.data_root,
-                per_chart_name=f"{chart}_member_extraction.csv",
-                combined_rel=(
-                    "02-imaging-pipeline",
-                    "member-verification",
-                    "output",
-                    "member_extraction_results.csv",
-                ),
-                chart_name=chart,
-            ),
-        ]
-        return any(bool(rows) for rows in checks)
+        ids = self._overlay_chart_id_set()
+        if not ids:
+            return False
+        from app.services.imaging_overlays import chart_id_key
+
+        return chart in ids or chart_id_key(chart) in ids
 
     def _imaging_processed_count(self, folder_dir: Path, page_count: int) -> int:
         """Pages with real overlay data; avoid fabricating counts."""
