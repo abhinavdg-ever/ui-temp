@@ -1013,20 +1013,20 @@ input {
   color: var(--muted);
 }
 
-/* >90% */
+/* >90% — light green */
 .ocr-match-rate.is-high {
-  border-color: #b91c1c;
-  background: #fee2e2;
-  color: #7f1d1d;
+  border-color: #86efac;
+  background: #dcfce7;
+  color: #166534;
 }
 
 .ocr-match-rate.is-high .ocr-match-label,
 .ocr-match-rate.is-high .ocr-match-engines {
-  color: #991b1b;
+  color: #15803d;
 }
 
 .ocr-match-rate.is-high .ocr-match-value {
-  color: #7f1d1d;
+  color: #14532d;
 }
 
 /* 70–90% */
