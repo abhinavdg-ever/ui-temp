@@ -254,7 +254,7 @@ def main() -> None:
     parser.add_argument(
         "--schema",
         default=None,
-        help="Postgres schema (default: DB_SCHEMA / PG_SCHEMA / imaging_outputs)",
+        help="Postgres schema (default: DB_SCHEMA / PG_SCHEMA / public)",
     )
     args = parser.parse_args()
 

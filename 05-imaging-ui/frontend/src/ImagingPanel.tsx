@@ -3,6 +3,7 @@ import type {
   ImagingDocumentResponse,
   ImagingManifestDetails,
   ImagingPageResult,
+  ImagingVerificationDetails,
 } from "./api";
 
 type ImagingTab = "page" | "doc";
@@ -65,18 +66,52 @@ function DetailSection({
   );
 }
 
-function ManifestDetails({ manifest }: { manifest: ImagingManifestDetails }) {
+function ManifestDetails({
+  manifest,
+  verification,
+}: {
+  manifest: ImagingManifestDetails;
+  verification?: ImagingVerificationDetails | null;
+}) {
   return (
-    <div className="imaging-manifest-row" role="group" aria-label="Manifest details">
-      <span>
-        <strong>Member Name:</strong> {fmt(manifest.member)}
-      </span>
-      <span>
-        <strong>DOB:</strong> {fmt(manifest.dob)}
-      </span>
-      <span>
-        <strong>Member ID:</strong> {fmt(manifest.memberId)}
-      </span>
+    <div className="imaging-manifest-stack">
+      <div className="imaging-manifest-row" role="group" aria-label="Manifest details">
+        <span>
+          <strong>Member Name:</strong> {fmt(manifest.member)}
+        </span>
+        <span>
+          <strong>DOB:</strong> {fmt(manifest.dob)}
+        </span>
+        <span>
+          <strong>Member ID:</strong> {fmt(manifest.memberId)}
+        </span>
+      </div>
+      {verification ? (
+        <div
+          className="imaging-manifest-row imaging-verification-row"
+          role="group"
+          aria-label="Member verification summary"
+        >
+          <span>
+            <strong>Status:</strong> {fmt(verification.finalStatus)}
+          </span>
+          <span>
+            <strong>Match conf.:</strong>{" "}
+            {fmtConfidence(verification.matchedConfidence)}
+          </span>
+          <span>
+            <strong>Pages:</strong>{" "}
+            {verification.pagesMatched != null && verification.pagesChecked != null
+              ? `${verification.pagesMatched}/${verification.pagesChecked}`
+              : "—"}
+          </span>
+          {verification.decisionReason ? (
+            <span className="imaging-verification-reason">
+              <strong>Reason:</strong> {verification.decisionReason}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -289,7 +324,10 @@ export default function ImagingPanel({
   if (tab === "doc") {
     return (
       <div className="imaging-panel-stack">
-        <ManifestDetails manifest={manifest} />
+        <ManifestDetails
+          manifest={manifest}
+          verification={document.verification}
+        />
         <DocSummary pages={document.pages} />
       </div>
     );
@@ -298,7 +336,10 @@ export default function ImagingPanel({
   if (!currentPage) {
     return (
       <div className="imaging-panel-stack">
-        <ManifestDetails manifest={manifest} />
+        <ManifestDetails
+          manifest={manifest}
+          verification={document.verification}
+        />
         <div className="ocr-empty">
           {currentFileName
             ? `No imaging row for ${currentFileName}.`
@@ -310,7 +351,10 @@ export default function ImagingPanel({
 
   return (
     <div className="imaging-panel-stack">
-      <ManifestDetails manifest={manifest} />
+      <ManifestDetails
+        manifest={manifest}
+        verification={document.verification}
+      />
       <PageDetails page={currentPage} />
     </div>
   );

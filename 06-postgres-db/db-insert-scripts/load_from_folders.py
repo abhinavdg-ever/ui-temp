@@ -122,8 +122,8 @@ def psycopg_dsn(url: str) -> str:
 
 
 def db_schema() -> str:
-    """Postgres schema for imaging tables (live DB uses imaging_outputs, not public)."""
-    return (os.environ.get("DB_SCHEMA") or os.environ.get("PG_SCHEMA") or "imaging_outputs").strip() or "imaging_outputs"
+    """Postgres schema for imaging tables (POC DB: database imaging_outputs, schema public)."""
+    return (os.environ.get("DB_SCHEMA") or os.environ.get("PG_SCHEMA") or "public").strip() or "public"
 
 
 def configure_connection(conn: object) -> str:
@@ -133,8 +133,8 @@ def configure_connection(conn: object) -> str:
         # Validate identifier (letters, digits, underscore only)
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", schema):
             raise ValueError(f"Invalid DB_SCHEMA: {schema!r}")
-        cur.execute(f"SET search_path TO {schema}, public")
-    print(f"search_path: {schema}, public")
+        cur.execute(f"SET search_path TO {schema}")
+    print(f"search_path: {schema}")
     return schema
 
 
@@ -346,7 +346,7 @@ def upsert_chart(
 ) -> int:
     """Insert or update by chart_name.
 
-    Does NOT use ON CONFLICT — live `imaging_outputs.chart_list` may lack UNIQUE(chart_name).
+    Does NOT use ON CONFLICT — chart_name may lack UNIQUE; SELECT then UPDATE/INSERT.
     """
     cur.execute(
         "SELECT id FROM chart_list WHERE chart_name = %s ORDER BY id LIMIT 1",
@@ -660,7 +660,7 @@ def main() -> None:
     parser.add_argument(
         "--schema",
         default=None,
-        help="Postgres schema (default: DB_SCHEMA / PG_SCHEMA / imaging_outputs)",
+        help="Postgres schema (default: DB_SCHEMA / PG_SCHEMA / public)",
     )
     args = parser.parse_args()
 
@@ -727,13 +727,30 @@ def main() -> None:
         if args.container_name:
             print(f"BLOB_CONTAINER={args.container_name}")
         print(f"BLOB_PATH_TEMPLATE={args.path_template}")
-        load_folders(
-            conn,
-            data_root,
-            metadata_rows,
-            args.container_name,
-            args.path_template,
-        )
+        try:
+            load_folders(
+                conn,
+                data_root,
+                metadata_rows,
+                args.container_name,
+                args.path_template,
+            )
+        except Exception as exc:
+            err = str(exc)
+            if "InsufficientPrivilege" in type(exc).__name__ or "permission denied" in err.lower():
+                schema = db_schema()
+                print(
+                    "\nPostgres permission denied for chart_list.\n"
+                    f"  DATABASE_URL user cannot SELECT/INSERT on {schema}.chart_list\n"
+                    "  Connection comes from 05-imaging-ui/.env → DATABASE_URL\n"
+                    "  Ask a DBA to grant, e.g.:\n"
+                    f"    GRANT USAGE ON SCHEMA {schema} TO aiuser;\n"
+                    f"    GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {schema} TO aiuser;\n"
+                    f"    GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA {schema} TO aiuser;\n"
+                    "  Confirm DATABASE_URL points at database imaging_outputs and DB_SCHEMA=public.\n",
+                    file=sys.stderr,
+                )
+            raise
         print("Done — chart_list, page_list, manifest_member_list, ocr_results written.")
 
 

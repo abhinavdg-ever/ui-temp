@@ -320,15 +320,78 @@ class LocalFolderRepository(FolderRepository):
         return folder_dir / "imaging" / f"{folder_dir.name}_imaging.json"
 
     def _has_imaging(self, folder_dir: Path) -> bool:
+        """True if imaging JSON or any pipeline CSV overlay exists for this chart."""
         path = self._imaging_path(folder_dir)
         try:
-            return path.is_file() and path.stat().st_size > 0
+            if path.is_file() and path.stat().st_size > 0:
+                return True
         except OSError:
-            return False
+            pass
+        imaging_dir = folder_dir / "imaging"
+        if imaging_dir.is_dir():
+            for name in (
+                f"{folder_dir.name}_dos.csv",
+                f"{folder_dir.name}_hw_printed.csv",
+                f"{folder_dir.name}_rotation.csv",
+                f"{folder_dir.name}_member_extraction.csv",
+            ):
+                p = imaging_dir / name
+                if p.is_file() and p.stat().st_size > 0:
+                    return True
+        # Combined pack outputs (header-only files don't count as "has imaging")
+        from app.services.imaging_overlays import collect_rows
+
+        chart = folder_dir.name
+        checks = [
+            collect_rows(
+                folder_dir=folder_dir,
+                data_root=self.data_root,
+                per_chart_name=f"{chart}_dos.csv",
+                combined_rel=(
+                    "02-imaging-pipeline",
+                    "dos-extraction",
+                    "output",
+                    "dos_extraction.csv",
+                ),
+                chart_name=chart,
+            ),
+            collect_rows(
+                folder_dir=folder_dir,
+                data_root=self.data_root,
+                per_chart_name=f"{chart}_hw_printed.csv",
+                combined_rel=("01-ocr-extraction", "output", "hw_printed.csv"),
+                chart_name=chart,
+            ),
+            collect_rows(
+                folder_dir=folder_dir,
+                data_root=self.data_root,
+                per_chart_name=f"{chart}_rotation.csv",
+                combined_rel=(
+                    "02-imaging-pipeline",
+                    "rotation-orientation",
+                    "output",
+                    "rotation.csv",
+                ),
+                chart_name=chart,
+            ),
+            collect_rows(
+                folder_dir=folder_dir,
+                data_root=self.data_root,
+                per_chart_name=f"{chart}_member_extraction.csv",
+                combined_rel=(
+                    "02-imaging-pipeline",
+                    "member-extraction",
+                    "output",
+                    "member_extraction_results.csv",
+                ),
+                chart_name=chart,
+            ),
+        ]
+        return any(bool(rows) for rows in checks)
 
     def _imaging_processed_count(self, folder_dir: Path, page_count: int) -> int:
-        """Until Postgres is wired, imaging is always available as dummy when pages exist."""
-        if page_count == 0:
+        """Pages with real overlay data; avoid fabricating counts."""
+        if page_count == 0 or not self._has_imaging(folder_dir):
             return 0
         return page_count
 
@@ -347,34 +410,13 @@ class LocalFolderRepository(FolderRepository):
                 return found
         return self._dummy_manifest()
 
-    def _dummy_imaging_pages(self, folder_dir: Path, pages: list[tuple[int, Path]]) -> list[ImagingPageResult]:
-        """Backup/dummy imaging rows until Postgres schema is wired."""
-        manifest = self._manifest_for_folder(folder_dir.name)
-        results: list[ImagingPageResult] = []
-        for idx, (num, path) in enumerate(pages):
-            results.append(
-                ImagingPageResult(
-                    pageNumber=num,
-                    fileName=path.name,
-                    memberName=manifest.member if idx == 0 else (manifest.member or f"Member {num}"),
-                    memberDob=manifest.dob,
-                    memberId=manifest.memberId,
-                    memberConfidence=round(0.92 - (idx * 0.02), 2),
-                    handwrittenOrPrinted="Printed" if idx % 2 == 0 else "Handwritten",
-                    orientationAngle=round(0.5 + idx * 0.15, 2),
-                    tiltAngle=round(0.8 + idx * 0.1, 2),
-                    mirrored=False,
-                    pageQualityConfidence=round(0.94 - idx * 0.02, 2),
-                    dosFrom="01/03/2024" if idx % 2 == 0 else "01/04/2024",
-                    dosTo="01/03/2024" if idx % 2 == 0 else "01/05/2024",
-                    dosConfidence=round(0.9 - idx * 0.03, 2),
-                    docDosFrom="01/03/2024" if idx % 2 == 0 else "01/04/2024",
-                    docDosTo="01/03/2024" if idx % 2 == 0 else "01/05/2024",
-                    pageType="Daily Note" if idx % 2 == 0 else "Progress Note",
-                    pageTypeConfidence=round(0.88 - idx * 0.02, 2),
-                )
-            )
-        return results
+    def _empty_imaging_pages(
+        self, folder_dir: Path, pages: list[tuple[int, Path]]
+    ) -> list[ImagingPageResult]:
+        """Page skeletons only — extraction fields filled only from pipeline CSVs."""
+        from app.services.imaging_overlays import empty_imaging_pages
+
+        return empty_imaging_pages(pages)
 
     def _parse_imaging_manifest(self, data: Any, folder_id: str) -> ImagingManifestDetails:
         # Prefer CSV metadata (local mode); fall back to JSON embedded manifest, then empty
@@ -404,7 +446,7 @@ class LocalFolderRepository(FolderRepository):
                 continue
         if parsed:
             return parsed
-        return self._dummy_imaging_pages(folder_dir, self._page_files(folder_dir))
+        return self._empty_imaging_pages(folder_dir, self._page_files(folder_dir))
 
     def _page_files(self, folder_dir: Path) -> list[tuple[int, Path]]:
         """Collect page images from pages/ (preferred) or folder root as fallback.
@@ -515,7 +557,7 @@ class LocalFolderRepository(FolderRepository):
         has_prelim = self._has_ocr(folder_dir, "preliminary")
         has_final1 = self._has_ocr(folder_dir, "final1")
         has_final2 = self._has_ocr(folder_dir, "final2")
-        has_imaging = True  # dummy imaging always available pre-Postgres
+        has_imaging = self._has_imaging(folder_dir)
         page_summaries = [
             PageSummary(
                 page_number=num,
@@ -524,7 +566,7 @@ class LocalFolderRepository(FolderRepository):
                 has_preliminary_ocr=has_prelim,
                 has_final1_ocr=has_final1,
                 has_final2_ocr=has_final2,
-                has_imaging=has_imaging and len(pages) > 0,
+                has_imaging=has_imaging,
             )
             for num, path in pages
         ]
@@ -629,10 +671,24 @@ class LocalFolderRepository(FolderRepository):
         return _index_hw_rows(rows, chart)
 
     def get_imaging(self, folder_id: str) -> ImagingDocumentResponse:
-        """Load imaging JSON / dummy pages; overlay DOS + HW/Printed CSV when present."""
+        """Build imaging rows from pipeline CSVs only (no dummy fabricated values)."""
+        from app.services.imaging_overlays import (
+            collect_rows,
+            empty_imaging_pages,
+            index_dos_rows,
+            index_hw_rows,
+            index_member_extraction_rows,
+            index_rotation_rows,
+            load_verification,
+            overlay_fields,
+            read_csv_rows,
+            monorepo_root_from_data,
+        )
+
         folder_dir = self._folder_dir(folder_id)
         pages = self._page_files(folder_dir)
         path = self._imaging_path(folder_dir)
+        chart = folder_dir.name
 
         if path.is_file():
             try:
@@ -645,17 +701,111 @@ class LocalFolderRepository(FolderRepository):
             imaging_pages = self._parse_imaging_pages(data, folder_dir)
             manifest = self._parse_imaging_manifest(data, folder_id)
         else:
-            imaging_pages = self._dummy_imaging_pages(folder_dir, pages)
+            imaging_pages = empty_imaging_pages(pages)
             manifest = self._manifest_for_folder(folder_id)
 
-        imaging_pages = _overlay_dos_on_pages(
-            imaging_pages, self._dos_overlay_for_folder(folder_dir)
+        imaging_pages = overlay_fields(
+            imaging_pages,
+            index_dos_rows(
+                collect_rows(
+                    folder_dir=folder_dir,
+                    data_root=self.data_root,
+                    per_chart_name=f"{chart}_dos.csv",
+                    combined_rel=(
+                        "02-imaging-pipeline",
+                        "dos-extraction",
+                        "output",
+                        "dos_extraction.csv",
+                    ),
+                    chart_name=chart,
+                ),
+                chart,
+            ),
         )
-        imaging_pages = _overlay_hw_on_pages(
-            imaging_pages, self._hw_overlay_for_folder(folder_dir)
+        imaging_pages = overlay_fields(
+            imaging_pages,
+            index_hw_rows(
+                collect_rows(
+                    folder_dir=folder_dir,
+                    data_root=self.data_root,
+                    per_chart_name=f"{chart}_hw_printed.csv",
+                    combined_rel=("01-ocr-extraction", "output", "hw_printed.csv"),
+                    chart_name=chart,
+                ),
+                chart,
+            ),
         )
+        imaging_pages = overlay_fields(
+            imaging_pages,
+            index_rotation_rows(
+                collect_rows(
+                    folder_dir=folder_dir,
+                    data_root=self.data_root,
+                    per_chart_name=f"{chart}_rotation.csv",
+                    combined_rel=(
+                        "02-imaging-pipeline",
+                        "rotation-orientation",
+                        "output",
+                        "rotation.csv",
+                    ),
+                    chart_name=chart,
+                ),
+                chart,
+            ),
+        )
+        imaging_pages = overlay_fields(
+            imaging_pages,
+            index_member_extraction_rows(
+                collect_rows(
+                    folder_dir=folder_dir,
+                    data_root=self.data_root,
+                    per_chart_name=f"{chart}_member_extraction.csv",
+                    combined_rel=(
+                        "02-imaging-pipeline",
+                        "member-extraction",
+                        "output",
+                        "member_extraction_results.csv",
+                    ),
+                    chart_name=chart,
+                ),
+                chart,
+            ),
+        )
+
+        ver_rows = collect_rows(
+            folder_dir=folder_dir,
+            data_root=self.data_root,
+            per_chart_name=f"{chart}_member_verification.csv",
+            combined_rel=(
+                "02-imaging-pipeline",
+                "member-verification",
+                "output",
+                "member_verification_summary.csv",
+            ),
+            chart_name=chart,
+        )
+        # also allow dropping the excel export at pack root output
+        if not ver_rows:
+            alt = (
+                monorepo_root_from_data(self.data_root)
+                / "02-imaging-pipeline"
+                / "member-verification"
+                / "output"
+                / "member_verification_summary.csv"
+            )
+            ver_rows = [
+                r
+                for r in read_csv_rows(alt)
+                if (r.get("chart_id") or r.get("chart_name") or "").strip()
+                in {chart, chart.split("_", 1)[0]}
+                or chart.startswith((r.get("chart_id") or "") + "_")
+            ]
+
+        verification = load_verification(ver_rows, chart)
+
         return ImagingDocumentResponse(
             folder_id=folder_id,
             manifest=manifest,
+            verification=verification,
             pages=imaging_pages,
         )

@@ -17,6 +17,7 @@ def build_repository(settings: Settings) -> FolderRepository:
         return PostgresFolderRepository(
             settings.database_url,
             data_root=settings.resolved_data_root,
+            db_schema=settings.db_schema,
         )
     return LocalFolderRepository(
         settings.resolved_data_root,

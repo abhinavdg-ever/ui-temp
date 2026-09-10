@@ -86,10 +86,28 @@ cd "..\..\06-postgres-db\db-insert-scripts"
 python load_dos_csv.py
 ```
 
-Uses `DATABASE_URL` from `05-imaging-ui\.env` (e.g. `…@172.20.4.170/imaging_outputs`).
+Uses `DATABASE_URL` from `05-imaging-ui\.env`:
 
-Tables live in schema **`imaging_outputs`** (set via `DB_SCHEMA`, default). The loader sets
-`search_path` and upserts charts **without** `ON CONFLICT (chart_name)` (that column is not UNIQUE on the live DB).
+```
+postgresql+psycopg://aiuser:…@172.20.4.170:5432/imaging_outputs
+```
+
+- **Database** name: `imaging_outputs`
+- **Schema**: `public` (`DB_SCHEMA=public`, default)
+- Tables: `chart_list`, `page_list`, `manifest_member_list`, `ocr_results`, `ocr_quality_results`, `dos_extraction_results`
+
+Loaders set `search_path` to `public` and upsert charts **without** `ON CONFLICT (chart_name)`.
+
+### Postgres permission errors
+
+If you see `permission denied for table chart_list`, the **user in `DATABASE_URL`** (usually `aiuser`)
+lacks grants on `public` tables:
+
+```sql
+GRANT USAGE ON SCHEMA public TO aiuser;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO aiuser;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO aiuser;
+```
 
 ## OCR mapping
 

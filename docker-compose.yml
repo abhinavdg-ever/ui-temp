@@ -12,7 +12,9 @@ services:
       # Local-mode Manifest Details CSVs (06-postgres-db/manifest)
       METADATA_ROOT: /data/manifest
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://127.0.0.1:3001,http://localhost:3001}
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://user:password@localhost:5432/advantmed_imaging}
+      # POC Postgres: database imaging_outputs, schema public @ 172.20.4.170
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://aiuser:passwordpoc2026@172.20.4.170:5432/imaging_outputs}
+      DB_SCHEMA: ${DB_SCHEMA:-public}
       FILE_VIEWER_BLOB_ENABLED: ${FILE_VIEWER_BLOB_ENABLED:-false}
       BLOB_AUTH_MODE: ${BLOB_AUTH_MODE:-entra}
       BLOB_ACCOUNT_URL: ${BLOB_ACCOUNT_URL:-}

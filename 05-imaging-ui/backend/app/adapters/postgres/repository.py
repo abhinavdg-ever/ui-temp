@@ -43,12 +43,18 @@ def _psycopg_url(database_url: str) -> str:
 def _db_schema() -> str:
     import os
 
-    return (os.environ.get("DB_SCHEMA") or os.environ.get("PG_SCHEMA") or "imaging_outputs").strip() or "imaging_outputs"
+    return (os.environ.get("DB_SCHEMA") or os.environ.get("PG_SCHEMA") or "public").strip() or "public"
 
 
 class PostgresFolderRepository(FolderRepository):
-    def __init__(self, database_url: str, data_root: Path | None = None):
+    def __init__(
+        self,
+        database_url: str,
+        data_root: Path | None = None,
+        db_schema: str = "public",
+    ):
         self.database_url = _psycopg_url(database_url)
+        self.db_schema = (db_schema or "public").strip() or "public"
         self._local = LocalFolderRepository(data_root) if data_root is not None else None
 
     def _require_local(self) -> LocalFolderRepository:
@@ -68,12 +74,12 @@ class PostgresFolderRepository(FolderRepository):
                 detail="Install psycopg: pip install 'psycopg[binary]'",
             ) from exc
         conn = psycopg.connect(self.database_url)
-        schema = _db_schema()
+        schema = self.db_schema or _db_schema()
         if not schema.replace("_", "").isalnum():
             conn.close()
             raise HTTPException(status_code=500, detail=f"Invalid DB_SCHEMA: {schema!r}")
         with conn.cursor() as cur:
-            cur.execute(f"SET search_path TO {schema}, public")
+            cur.execute(f"SET search_path TO {schema}")
         return conn
 
     def list_folders(self) -> list[FolderSummary]:
@@ -286,10 +292,12 @@ class PostgresFolderRepository(FolderRepository):
             return ImagingDocumentResponse(
                 folder_id=doc.folder_id,
                 manifest=db_manifest,
+                verification=doc.verification,
                 pages=pages,
             )
         return ImagingDocumentResponse(
             folder_id=doc.folder_id,
             manifest=doc.manifest,
+            verification=doc.verification,
             pages=pages,
         )

@@ -19,7 +19,9 @@ class Settings(BaseSettings):
     # Local mode: stacked metadata_R{n}_B{n}.csv for Manifest Details
     # Monorepo: ../06-postgres-db/manifest  |  Nested: ./postgres-db/manifest
     metadata_root: str = "../06-postgres-db/manifest"
-    database_url: str = "postgresql+psycopg://user:password@localhost:5432/advantmed_imaging"
+    database_url: str = "postgresql+psycopg://aiuser:passwordpoc2026@172.20.4.170:5432/imaging_outputs"
+    # POC tables are in public (database name is imaging_outputs)
+    db_schema: str = "public"
     api_host: str = "127.0.0.1"
     api_port: int = 8002
     allowed_origins: str = "http://127.0.0.1:5174,http://localhost:5174"

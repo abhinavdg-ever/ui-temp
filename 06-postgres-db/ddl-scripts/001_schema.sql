@@ -13,17 +13,17 @@
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- Live POC DB: tables live under schema imaging_outputs (not public).
-CREATE SCHEMA IF NOT EXISTS imaging_outputs;
-SET search_path TO imaging_outputs, public;
+-- Database name: imaging_outputs (host 172.20.4.170)
+-- Tables live in schema public (as shown in DBeaver).
+SET search_path TO public;
 
 -- ---------------------------------------------------------------------
 -- CORE
 -- ---------------------------------------------------------------------
 
-CREATE TABLE chart_list (
+CREATE TABLE IF NOT EXISTS chart_list (
     id                  BIGSERIAL PRIMARY KEY,
-    -- Not UNIQUE in live DB (duplicates allowed across runs); loaders upsert by name+id.
+    -- Not UNIQUE: loaders upsert by SELECT then UPDATE/INSERT.
     chart_name          VARCHAR(150) NOT NULL,
     page_count          INT,
     status              VARCHAR(30) NOT NULL DEFAULT 'received',
@@ -45,11 +45,12 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_chart_list_updated_at ON chart_list;
 CREATE TRIGGER trg_chart_list_updated_at
     BEFORE UPDATE ON chart_list
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
-CREATE TABLE page_list (
+CREATE TABLE IF NOT EXISTS page_list (
     id                        BIGSERIAL PRIMARY KEY,
     chart_id                  BIGINT NOT NULL REFERENCES chart_list(id) ON DELETE CASCADE,
     page_name                 VARCHAR(150) NOT NULL,
@@ -60,15 +61,16 @@ CREATE TABLE page_list (
     updated_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (chart_id, page_name)
 );
-CREATE INDEX idx_page_list_chart_id ON page_list(chart_id);
+CREATE INDEX IF NOT EXISTS idx_page_list_chart_id ON page_list(chart_id);
 
+DROP TRIGGER IF EXISTS trg_page_list_updated_at ON page_list;
 CREATE TRIGGER trg_page_list_updated_at
     BEFORE UPDATE ON page_list
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- Chart-scoped candidate members (parsed Manifest.xlsx rows for this chart;
 -- typically 2-3 candidates per chart)
-CREATE TABLE manifest_member_list (
+CREATE TABLE IF NOT EXISTS manifest_member_list (
     id                  BIGSERIAL PRIMARY KEY,
     chart_id            BIGINT NOT NULL REFERENCES chart_list(id) ON DELETE CASCADE,
     member_name         VARCHAR(255) NOT NULL,
@@ -77,8 +79,9 @@ CREATE TABLE manifest_member_list (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_manifest_member_list_chart_id ON manifest_member_list(chart_id);
+CREATE INDEX IF NOT EXISTS idx_manifest_member_list_chart_id ON manifest_member_list(chart_id);
 
+DROP TRIGGER IF EXISTS trg_manifest_member_list_updated_at ON manifest_member_list;
 CREATE TRIGGER trg_manifest_member_list_updated_at
     BEFORE UPDATE ON manifest_member_list
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
@@ -87,7 +90,7 @@ CREATE TRIGGER trg_manifest_member_list_updated_at
 -- OCR & DOS EXTRACTION
 -- ---------------------------------------------------------------------
 
-CREATE TABLE ocr_results (
+CREATE TABLE IF NOT EXISTS ocr_results (
     id          BIGSERIAL PRIMARY KEY,
     chart_id    BIGINT NOT NULL REFERENCES chart_list(id) ON DELETE CASCADE,
     page_id     BIGINT NOT NULL REFERENCES page_list(id) ON DELETE CASCADE,
@@ -98,15 +101,16 @@ CREATE TABLE ocr_results (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_ocr_results_chart_id ON ocr_results(chart_id);
-CREATE INDEX idx_ocr_results_page_id ON ocr_results(page_id);
+CREATE INDEX IF NOT EXISTS idx_ocr_results_chart_id ON ocr_results(chart_id);
+CREATE INDEX IF NOT EXISTS idx_ocr_results_page_id ON ocr_results(page_id);
 
+DROP TRIGGER IF EXISTS trg_ocr_results_updated_at ON ocr_results;
 CREATE TRIGGER trg_ocr_results_updated_at
     BEFORE UPDATE ON ocr_results
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- Image / scan quality assessment
-CREATE TABLE ocr_quality_results (
+CREATE TABLE IF NOT EXISTS ocr_quality_results (
     id                BIGSERIAL PRIMARY KEY,
     chart_id          BIGINT NOT NULL REFERENCES chart_list(id) ON DELETE CASCADE,
     page_id           BIGINT NOT NULL REFERENCES page_list(id) ON DELETE CASCADE,
@@ -118,14 +122,15 @@ CREATE TABLE ocr_quality_results (
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_ocr_quality_chart_id ON ocr_quality_results(chart_id);
-CREATE INDEX idx_ocr_quality_page_id ON ocr_quality_results(page_id);
+CREATE INDEX IF NOT EXISTS idx_ocr_quality_chart_id ON ocr_quality_results(chart_id);
+CREATE INDEX IF NOT EXISTS idx_ocr_quality_page_id ON ocr_quality_results(page_id);
 
+DROP TRIGGER IF EXISTS trg_ocr_quality_updated_at ON ocr_quality_results;
 CREATE TRIGGER trg_ocr_quality_updated_at
     BEFORE UPDATE ON ocr_quality_results
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
-CREATE TABLE dos_extraction_results (
+CREATE TABLE IF NOT EXISTS dos_extraction_results (
     id               BIGSERIAL PRIMARY KEY,
     chart_id         BIGINT NOT NULL REFERENCES chart_list(id) ON DELETE CASCADE,
     page_id          BIGINT NOT NULL REFERENCES page_list(id) ON DELETE CASCADE,
@@ -139,9 +144,10 @@ CREATE TABLE dos_extraction_results (
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_dos_extraction_chart_id ON dos_extraction_results(chart_id);
-CREATE INDEX idx_dos_extraction_page_id ON dos_extraction_results(page_id);
+CREATE INDEX IF NOT EXISTS idx_dos_extraction_chart_id ON dos_extraction_results(chart_id);
+CREATE INDEX IF NOT EXISTS idx_dos_extraction_page_id ON dos_extraction_results(page_id);
 
+DROP TRIGGER IF EXISTS trg_dos_extraction_updated_at ON dos_extraction_results;
 CREATE TRIGGER trg_dos_extraction_updated_at
     BEFORE UPDATE ON dos_extraction_results
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();

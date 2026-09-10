@@ -46,7 +46,7 @@ class OcrTextResponse(BaseModel):
 
 
 class ImagingPageResult(BaseModel):
-    """Per-page imaging fields (dummy/local JSON for now; Postgres later)."""
+    """Per-page imaging fields from pipeline CSVs / Postgres (no fabricated dummy values)."""
 
     pageNumber: int
     fileName: str
@@ -94,9 +94,21 @@ class ImagingManifestDetails(BaseModel):
     memberId: str | None = None
 
 
+class ImagingVerificationDetails(BaseModel):
+    """Doc-level member_verification_summary fields."""
+
+    finalStatus: str | None = None
+    matchedMemberInfo: str | None = None
+    matchedConfidence: float | None = None
+    pagesMatched: int | None = None
+    pagesChecked: int | None = None
+    decisionReason: str | None = None
+
+
 class ImagingDocumentResponse(BaseModel):
     folder_id: str
     manifest: ImagingManifestDetails = Field(default_factory=ImagingManifestDetails)
+    verification: ImagingVerificationDetails | None = None
     pages: list[ImagingPageResult] = Field(default_factory=list)
 
 

@@ -193,7 +193,8 @@ See `05-imaging-ui/.env`:
 | `METADATA_ROOT` | Manifest CSVs when `DATA_MODE=local` (`../06-postgres-db/manifest`) |
 | `DATA_HOST_PATH` | Host path mounted into Docker backend (default `./05-imaging-ui/data/folders`) |
 | `METADATA_HOST_PATH` | Host Manifest CSV dir for Docker (default `./06-postgres-db/manifest`) |
-| `DATABASE_URL` | Postgres URL (`DATA_MODE=postgres` reads `manifest_member_list` + `ocr_results`) |
+| `DATABASE_URL` | Postgres URL — DB `imaging_outputs` @ `172.20.4.170` (`DATA_MODE=postgres`) |
+| `DB_SCHEMA` | Schema for tables (POC: `public`) |
 | `ALLOWED_ORIGINS` | CORS origins for direct API access |
 | `FILE_VIEWER_BLOB_ENABLED` | Show Local / Blob toggle in File Viewer |
 | `BLOB_AUTH_MODE` | `entra` (default, Shared Key off OK) or legacy `sas` |

@@ -63,9 +63,19 @@ export type ImagingManifestDetails = {
   memberId: string | null;
 };
 
+export type ImagingVerificationDetails = {
+  finalStatus: string | null;
+  matchedMemberInfo: string | null;
+  matchedConfidence: number | null;
+  pagesMatched: number | null;
+  pagesChecked: number | null;
+  decisionReason: string | null;
+};
+
 export type ImagingDocumentResponse = {
   folder_id: string;
   manifest: ImagingManifestDetails;
+  verification?: ImagingVerificationDetails | null;
   pages: ImagingPageResult[];
 };
 

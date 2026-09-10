@@ -1369,18 +1369,35 @@ input {
   color: var(--muted);
 }
 
+.imaging-manifest-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 0.5rem;
+}
+
 .imaging-manifest-row {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 0.35rem 1.35rem;
-  margin-bottom: 0.5rem;
+  margin-bottom: 0;
   padding: 0.5rem 0.75rem;
   border: 1px solid var(--brand-800);
   border-radius: 8px;
   background: var(--brand-800);
   color: #fff;
   font-size: 0.82rem;
+}
+
+.imaging-verification-row {
+  border-color: var(--brand-600, #2f6b4f);
+  background: #1f4d38;
+}
+
+.imaging-verification-reason {
+  flex: 1 1 100%;
+  opacity: 0.92;
 }
 
 .imaging-manifest-row strong {
