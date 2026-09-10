@@ -126,6 +126,15 @@ export function formatMatchRatePercent(rate: number | null): string {
   return `${Math.round(rate * 100)}%`;
 }
 
+/** Traffic-light class for Match rate badge. */
+export function matchRateToneClass(rate: number | null): string {
+  if (rate === null) return "is-na";
+  const pct = rate * 100;
+  if (pct > 90) return "is-high";
+  if (pct >= 70) return "is-mid";
+  return "is-low";
+}
+
 export function matchRateTitle(result: OcrMatchRate): string {
   if (result.rate === null) {
     if (result.count <= 1) {

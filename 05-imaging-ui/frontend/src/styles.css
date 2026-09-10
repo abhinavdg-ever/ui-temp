@@ -999,7 +999,7 @@ input {
   gap: 0.35rem;
   flex-shrink: 0;
   padding: 0.28rem 0.55rem;
-  border: 1px solid var(--brand-200, #b7d4c4);
+  border: 1px solid var(--border);
   border-radius: 7px;
   background: var(--card);
   font-size: 0.78rem;
@@ -1009,7 +1009,56 @@ input {
 
 .ocr-match-rate.is-na {
   border-color: var(--border);
+  background: var(--neutral-50, #f5f5f5);
   color: var(--muted);
+}
+
+/* >90% */
+.ocr-match-rate.is-high {
+  border-color: #b91c1c;
+  background: #fee2e2;
+  color: #7f1d1d;
+}
+
+.ocr-match-rate.is-high .ocr-match-label,
+.ocr-match-rate.is-high .ocr-match-engines {
+  color: #991b1b;
+}
+
+.ocr-match-rate.is-high .ocr-match-value {
+  color: #7f1d1d;
+}
+
+/* 70–90% */
+.ocr-match-rate.is-mid {
+  border-color: #a16207;
+  background: #fef3c7;
+  color: #713f12;
+}
+
+.ocr-match-rate.is-mid .ocr-match-label,
+.ocr-match-rate.is-mid .ocr-match-engines {
+  color: #92400e;
+}
+
+.ocr-match-rate.is-mid .ocr-match-value {
+  color: #713f12;
+}
+
+/* <70% */
+.ocr-match-rate.is-low {
+  border-color: #b91c1c;
+  background: #fee2e2;
+  color: #7f1d1d;
+}
+
+.ocr-match-rate.is-low .ocr-match-label,
+.ocr-match-rate.is-low .ocr-match-engines {
+  color: #991b1b;
+}
+
+.ocr-match-rate.is-low .ocr-match-value {
+  color: #7f1d1d;
 }
 
 .ocr-match-label {

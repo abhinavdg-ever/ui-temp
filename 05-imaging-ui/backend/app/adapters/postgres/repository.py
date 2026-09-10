@@ -40,6 +40,12 @@ def _psycopg_url(database_url: str) -> str:
     return url
 
 
+def _db_schema() -> str:
+    import os
+
+    return (os.environ.get("DB_SCHEMA") or os.environ.get("PG_SCHEMA") or "imaging_outputs").strip() or "imaging_outputs"
+
+
 class PostgresFolderRepository(FolderRepository):
     def __init__(self, database_url: str, data_root: Path | None = None):
         self.database_url = _psycopg_url(database_url)
@@ -61,7 +67,14 @@ class PostgresFolderRepository(FolderRepository):
                 status_code=501,
                 detail="Install psycopg: pip install 'psycopg[binary]'",
             ) from exc
-        return psycopg.connect(self.database_url)
+        conn = psycopg.connect(self.database_url)
+        schema = _db_schema()
+        if not schema.replace("_", "").isalnum():
+            conn.close()
+            raise HTTPException(status_code=500, detail=f"Invalid DB_SCHEMA: {schema!r}")
+        with conn.cursor() as cur:
+            cur.execute(f"SET search_path TO {schema}, public")
+        return conn
 
     def list_folders(self) -> list[FolderSummary]:
         return self._require_local().list_folders()

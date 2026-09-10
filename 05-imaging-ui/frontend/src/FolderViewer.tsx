@@ -31,6 +31,7 @@ import {
   formatMatchRatePercent,
   isUsableOcrPayload,
   matchRateTitle,
+  matchRateToneClass,
   pageMatchRate,
 } from "./ocrMatchRate";
 import { ocrTextForFilename } from "./ocrPages";
@@ -613,7 +614,9 @@ export default function FolderViewer({
                     ))}
                   </div>
                   <div
-                    className={`ocr-match-rate${ocrMatch.rate === null ? " is-na" : ""}`}
+                    className={`ocr-match-rate ${
+                      loadingOcr ? "is-na" : matchRateToneClass(ocrMatch.rate)
+                    }`}
                     title={matchRateTitle(ocrMatch)}
                     aria-label={`OCR match rate ${formatMatchRatePercent(ocrMatch.rate)}`}
                   >

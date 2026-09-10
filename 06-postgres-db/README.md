@@ -88,6 +88,9 @@ python load_dos_csv.py
 
 Uses `DATABASE_URL` from `05-imaging-ui\.env` (e.g. `…@172.20.4.170/imaging_outputs`).
 
+Tables live in schema **`imaging_outputs`** (set via `DB_SCHEMA`, default). The loader sets
+`search_path` and upserts charts **without** `ON CONFLICT (chart_name)` (that column is not UNIQUE on the live DB).
+
 ## OCR mapping
 
 | File / stage | `ocr_type` | UI kind |

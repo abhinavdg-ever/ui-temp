@@ -43,6 +43,7 @@ export type ImagingPageResult = {
   memberId: string | null;
   memberConfidence: number | null;
   handwrittenOrPrinted: string | null;
+  handwrittenOrPrintedConfidence?: number | null;
   orientationAngle: number | null;
   tiltAngle: number | null;
   mirrored: boolean | null;

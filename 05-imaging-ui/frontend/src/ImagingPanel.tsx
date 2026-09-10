@@ -117,14 +117,22 @@ function PageDetails({ page }: { page: ImagingPageResult }) {
         </table>
       </section>
       <DetailSection
-        title="Page Quality & Orientation"
+        title="Printed / Handwritten"
         showConfidence
         rows={[
           {
-            label: "Handwritten/Printed",
+            label: "Type",
             value: fmt(page.handwrittenOrPrinted),
-            confidence: qualityConf,
+            confidence: fmtConfidence(
+              page.handwrittenOrPrintedConfidence ?? page.pageQualityConfidence,
+            ),
           },
+        ]}
+      />
+      <DetailSection
+        title="Page Quality & Orientation"
+        showConfidence
+        rows={[
           {
             label: "Orientation Angle (Page)",
             value: fmt(page.orientationAngle),

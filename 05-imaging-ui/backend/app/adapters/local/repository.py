@@ -142,6 +142,60 @@ def _overlay_dos_on_pages(
     return out
 
 
+def _index_hw_rows(
+    rows: list[dict[str, str]], chart_name: str
+) -> dict[str, dict[str, Any]]:
+    by_key: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        cname = (row.get("chart_name") or chart_name).strip()
+        if cname and cname != chart_name:
+            continue
+        label = (row.get("handwritten_or_printed") or row.get("type") or "").strip()
+        if not label:
+            continue
+        conf_raw = (row.get("confidence") or "").strip()
+        conf: float | None = None
+        if conf_raw:
+            try:
+                conf = float(conf_raw)
+                if conf > 1:
+                    conf = conf / 100.0
+            except ValueError:
+                conf = None
+        fields: dict[str, Any] = {
+            "handwrittenOrPrinted": label,
+            "handwrittenOrPrintedConfidence": conf,
+        }
+        page_name = (row.get("page_name") or "").strip()
+        if page_name:
+            by_key[page_name.lower()] = fields
+            by_key[Path(page_name).name.lower()] = fields
+        raw_num = (row.get("page_number") or "").strip()
+        if raw_num.isdigit():
+            by_key[f"#{raw_num}"] = fields
+    return by_key
+
+
+def _overlay_hw_on_pages(
+    pages: list[ImagingPageResult],
+    hw_by_key: dict[str, dict[str, Any]],
+) -> list[ImagingPageResult]:
+    if not hw_by_key:
+        return pages
+    out: list[ImagingPageResult] = []
+    for page in pages:
+        hit = (
+            hw_by_key.get(page.fileName.lower())
+            or hw_by_key.get(Path(page.fileName).name.lower())
+            or hw_by_key.get(f"#{page.pageNumber}")
+        )
+        if not hit:
+            out.append(page)
+            continue
+        out.append(page.model_copy(update=hit))
+    return out
+
+
 def _mtime(path: Path) -> datetime | None:
     try:
         return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
@@ -548,8 +602,34 @@ class LocalFolderRepository(FolderRepository):
             ]
         return _index_dos_rows(rows, chart)
 
+    def _hw_overlay_for_folder(self, folder_dir: Path) -> dict[str, dict[str, Any]]:
+        """Prefer imaging/<chart>_hw_printed.csv, else 01-ocr-extraction/output/hw_printed.csv."""
+        chart = folder_dir.name
+        per_chart = folder_dir / "imaging" / f"{chart}_hw_printed.csv"
+        rows = _read_dos_csv_rows(per_chart)
+        if not rows:
+            combined = (
+                self.data_root.parent.parent.parent
+                / "01-ocr-extraction"
+                / "output"
+                / "hw_printed.csv"
+            )
+            if not combined.is_file():
+                combined = (
+                    self.data_root.parent.parent
+                    / "01-ocr-extraction"
+                    / "output"
+                    / "hw_printed.csv"
+                )
+            rows = [
+                r
+                for r in _read_dos_csv_rows(combined)
+                if (r.get("chart_name") or "").strip() == chart
+            ]
+        return _index_hw_rows(rows, chart)
+
     def get_imaging(self, folder_id: str) -> ImagingDocumentResponse:
-        """Load imaging JSON / dummy pages; overlay DOS From/To from DOS CSV when present."""
+        """Load imaging JSON / dummy pages; overlay DOS + HW/Printed CSV when present."""
         folder_dir = self._folder_dir(folder_id)
         pages = self._page_files(folder_dir)
         path = self._imaging_path(folder_dir)
@@ -570,6 +650,9 @@ class LocalFolderRepository(FolderRepository):
 
         imaging_pages = _overlay_dos_on_pages(
             imaging_pages, self._dos_overlay_for_folder(folder_dir)
+        )
+        imaging_pages = _overlay_hw_on_pages(
+            imaging_pages, self._hw_overlay_for_folder(folder_dir)
         )
         return ImagingDocumentResponse(
             folder_id=folder_id,

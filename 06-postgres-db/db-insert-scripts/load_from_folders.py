@@ -121,6 +121,23 @@ def psycopg_dsn(url: str) -> str:
     return url
 
 
+def db_schema() -> str:
+    """Postgres schema for imaging tables (live DB uses imaging_outputs, not public)."""
+    return (os.environ.get("DB_SCHEMA") or os.environ.get("PG_SCHEMA") or "imaging_outputs").strip() or "imaging_outputs"
+
+
+def configure_connection(conn: object) -> str:
+    """Point session at the imaging schema so unqualified table names resolve."""
+    schema = db_schema()
+    with conn.cursor() as cur:  # type: ignore[attr-defined]
+        # Validate identifier (letters, digits, underscore only)
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", schema):
+            raise ValueError(f"Invalid DB_SCHEMA: {schema!r}")
+        cur.execute(f"SET search_path TO {schema}, public")
+    print(f"search_path: {schema}, public")
+    return schema
+
+
 IMAGE_RE = re.compile(r"\.(jpe?g|png|webp|tif{1,2})$", re.IGNORECASE)
 PAGE_NUM_RE = re.compile(r"^(\d+)\.(jpe?g|png|webp|tif{1,2})$", re.IGNORECASE)
 OCR_MARKER_RE = re.compile(r"^=====\s*(.+?)\s*=====\s*$", re.MULTILINE)
@@ -327,15 +344,34 @@ def upsert_chart(
     path: str,
     container_name: str | None = None,
 ) -> int:
+    """Insert or update by chart_name.
+
+    Does NOT use ON CONFLICT — live `imaging_outputs.chart_list` may lack UNIQUE(chart_name).
+    """
+    cur.execute(
+        "SELECT id FROM chart_list WHERE chart_name = %s ORDER BY id LIMIT 1",
+        (chart_name,),
+    )
+    row = cur.fetchone()
+    if row:
+        chart_id = int(row[0])
+        cur.execute(
+            """
+            UPDATE chart_list
+               SET page_count = %s,
+                   path = %s,
+                   blob_container_name = COALESCE(%s, blob_container_name),
+                   updated_at = now()
+             WHERE id = %s
+            """,
+            (page_count, path, container_name or None, chart_id),
+        )
+        return chart_id
+
     cur.execute(
         """
         INSERT INTO chart_list (chart_name, page_count, status, path, blob_container_name)
         VALUES (%s, %s, 'received', %s, %s)
-        ON CONFLICT (chart_name) DO UPDATE
-            SET page_count = EXCLUDED.page_count,
-                path = EXCLUDED.path,
-                blob_container_name = COALESCE(EXCLUDED.blob_container_name, chart_list.blob_container_name),
-                updated_at = now()
         RETURNING id
         """,
         (chart_name, page_count, path, container_name or None),
@@ -344,11 +380,28 @@ def upsert_chart(
 
 
 def upsert_page(cur: object, chart_id: int, page_name: str) -> int:
+    """Insert or update page; works with or without UNIQUE(chart_id, page_name)."""
+    cur.execute(
+        """
+        SELECT id FROM page_list
+         WHERE chart_id = %s AND page_name = %s
+         ORDER BY id LIMIT 1
+        """,
+        (chart_id, page_name),
+    )
+    row = cur.fetchone()
+    if row:
+        page_id = int(row[0])
+        cur.execute(
+            "UPDATE page_list SET updated_at = now() WHERE id = %s",
+            (page_id,),
+        )
+        return page_id
+
     cur.execute(
         """
         INSERT INTO page_list (chart_id, page_name, ocr_prelim_status, ocr_final_status)
         VALUES (%s, %s, 'pending', 'pending')
-        ON CONFLICT (chart_id, page_name) DO UPDATE SET updated_at = now()
         RETURNING id
         """,
         (chart_id, page_name),
@@ -604,7 +657,15 @@ def main() -> None:
         default=os.environ.get("BLOB_PATH_TEMPLATE", "{folder}/pages/{filename}"),
         help="Blob path template (env BLOB_PATH_TEMPLATE); {folder}=chart_name",
     )
+    parser.add_argument(
+        "--schema",
+        default=None,
+        help="Postgres schema (default: DB_SCHEMA / PG_SCHEMA / imaging_outputs)",
+    )
     args = parser.parse_args()
+
+    if args.schema:
+        os.environ["DB_SCHEMA"] = args.schema
 
     database_url = psycopg_dsn(args.database_url)
     if not database_url:
@@ -659,6 +720,7 @@ def main() -> None:
 
     psycopg = _require_psycopg()
     with psycopg.connect(database_url) as conn:
+        configure_connection(conn)
         if args.ddl:
             apply_ddl(conn, DDL_PATH)
         print(f"Loading folders from {data_root}")

@@ -13,13 +13,18 @@
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
+-- Live POC DB: tables live under schema imaging_outputs (not public).
+CREATE SCHEMA IF NOT EXISTS imaging_outputs;
+SET search_path TO imaging_outputs, public;
+
 -- ---------------------------------------------------------------------
 -- CORE
 -- ---------------------------------------------------------------------
 
 CREATE TABLE chart_list (
     id                  BIGSERIAL PRIMARY KEY,
-    chart_name          VARCHAR(150) NOT NULL UNIQUE,
+    -- Not UNIQUE in live DB (duplicates allowed across runs); loaders upsert by name+id.
+    chart_name          VARCHAR(150) NOT NULL,
     page_count          INT,
     status              VARCHAR(30) NOT NULL DEFAULT 'received',
     blob_container_name VARCHAR(150),
@@ -29,8 +34,9 @@ CREATE TABLE chart_list (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_chart_list_status ON chart_list(status);
-CREATE INDEX idx_chart_list_run_batch ON chart_list(run_id, batch_id);
+CREATE INDEX IF NOT EXISTS idx_chart_list_chart_name ON chart_list(chart_name);
+CREATE INDEX IF NOT EXISTS idx_chart_list_status ON chart_list(status);
+CREATE INDEX IF NOT EXISTS idx_chart_list_run_batch ON chart_list(run_id, batch_id);
 
 CREATE OR REPLACE FUNCTION set_updated_at() RETURNS TRIGGER AS $$
 BEGIN

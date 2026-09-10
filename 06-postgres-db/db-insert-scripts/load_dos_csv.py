@@ -26,6 +26,7 @@ from pathlib import Path
 from load_from_folders import (
     PG_PACK_ROOT,
     bootstrap_env,
+    configure_connection,
     default_data_root,
     describe_dsn,
     parse_dob,
@@ -250,7 +251,15 @@ def main() -> None:
         action="store_true",
         help="Also load <chart>/imaging/<chart>_dos.csv when present",
     )
+    parser.add_argument(
+        "--schema",
+        default=None,
+        help="Postgres schema (default: DB_SCHEMA / PG_SCHEMA / imaging_outputs)",
+    )
     args = parser.parse_args()
+
+    if args.schema:
+        os.environ["DB_SCHEMA"] = args.schema
 
     database_url = psycopg_dsn(args.database_url)
     if not database_url:
@@ -289,6 +298,7 @@ def main() -> None:
 
     psycopg = _require_psycopg()
     with psycopg.connect(database_url) as conn:
+        configure_connection(conn)
         inserted, skip_chart, skip_page = load_dos_rows(conn, all_rows)
 
     print(

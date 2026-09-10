@@ -55,6 +55,7 @@ class ImagingPageResult(BaseModel):
     memberId: str | None = None
     memberConfidence: float | None = None
     handwrittenOrPrinted: str | None = None
+    handwrittenOrPrintedConfidence: float | None = None
     orientationAngle: float | None = None
     tiltAngle: float | None = None
     mirrored: bool | None = None
