@@ -239,6 +239,7 @@ function RejectionRulesTable({
     <table className="imaging-summary-table imaging-rejection-table">
       <thead>
         <tr>
+          <th scope="col">Component</th>
           <th scope="col">Status</th>
           <th scope="col">Matched Name</th>
           <th scope="col">Pages</th>
@@ -249,6 +250,7 @@ function RejectionRulesTable({
       <tbody>
         {rows.map((v, idx) => (
           <tr key={`${v.finalStatus ?? "row"}-${idx}`}>
+            <td>Member Verification</td>
             <td>{fmt(v.finalStatus)}</td>
             <td>{fmt(v.matchedName)}</td>
             <td>{fmtPagesMatched(v)}</td>

@@ -47,12 +47,13 @@ Not used: `extracted_gender`, `provided_name`, `provided_dob`, `matched_member_i
 id,chart_id,final_status,matched_member_id,matched_name,confidence,pages_matched,pages_checked,decision_reason
 ```
 
-| Column | Imaging UI |
-|--------|------------|
-| `final_status` | Doc Summary → Rejection Rules → Status |
+| Column | Imaging UI (Doc Summary → Rejection Rules) |
+|--------|--------------------------------------------|
+| (fixed) | Component = `Member Verification` |
+| `final_status` | Status |
 | `matched_name` | Matched name |
 | `confidence` (or `matched_confidence`) | Confidence |
 | `pages_matched` / `pages_checked` | Pages (`n/m`) |
 | `decision_reason` | Decision Reason |
 
-Match on `chart_id` = folder name. Shown only under **Rejection Rules** (no overall strip).
+Match on `chart_id` = folder name. Shown only under **Rejection Rules** (no overall strip). Additional rule components can share this table later.
