@@ -65,7 +65,6 @@ export type ImagingManifestDetails = {
 
 export type ImagingVerificationDetails = {
   finalStatus: string | null;
-  matchedMemberInfo: string | null;
   matchedConfidence: number | null;
   pagesMatched: number | null;
   pagesChecked: number | null;
@@ -76,6 +75,7 @@ export type ImagingDocumentResponse = {
   folder_id: string;
   manifest: ImagingManifestDetails;
   verification?: ImagingVerificationDetails | null;
+  verifications?: ImagingVerificationDetails[];
   pages: ImagingPageResult[];
 };
 

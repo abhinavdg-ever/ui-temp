@@ -1,8 +1,9 @@
 """
 DOS (Date of Service) extraction — ported from advantmed-autocoderai-new/scripts/split.py.
 
-Per page (first 60 words for regex; fuller snippet for gated LLM):
-  1) regex + visit keywords → dos_from / dos_to
+Per page (first + last ~60 words for regex; fuller snippet for gated LLM):
+  1) regex + visit / Admit / Discharge keywords → dos_from / dos_to
+     (prefer bottom-of-page window when dates live at the end)
   2) Azure OpenAI only if page has a clinical section cue
      (Chief Complaint, HPI, Discharge Note, …)
   3) For discharge / inpatient spans, LLM extracts both from and to
@@ -47,6 +48,8 @@ VISIT_KEYWORDS = [
     "ARRIVAL DATE",
     "INJECTION VISIT",
     # Admit / from
+    "ADMIT",
+    "ADMITTED",
     "ADMITDATE",
     "ADMIT DATE",
     "ADMITTED DATE",
@@ -57,6 +60,8 @@ VISIT_KEYWORDS = [
     "ADMISSION DATE",
     "ADMISSION ON",
     # Discharge / to
+    "DISCHARGE",
+    "DISCHARGED",
     "DISCHARGEDATE",
     "DISCHARGE DATE",
     "DISCHARGED ON",
@@ -66,6 +71,8 @@ VISIT_KEYWORDS = [
 
 # Keywords that specifically mean DOS From (admit side)
 FROM_KEYWORDS = {
+    "ADMIT",
+    "ADMITTED",
     "ADMITDATE",
     "ADMIT DATE",
     "ADMITTED DATE",
@@ -83,6 +90,8 @@ FROM_KEYWORDS = {
 
 # Keywords that specifically mean DOS To (discharge side)
 TO_KEYWORDS = {
+    "DISCHARGE",
+    "DISCHARGED",
     "DISCHARGEDATE",
     "DISCHARGE DATE",
     "DISCHARGED ON",
@@ -179,6 +188,21 @@ RANGE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Labeled Admit / Discharge + date (often at bottom of note)
+_DATE_ALT = "(?:" + "|".join(DATE_REGEXES) + ")"
+ADMIT_DATE_LABEL_RE = re.compile(
+    r"\b(?:admit(?:ted)?(?:\s+date)?|admission(?:\s+date)?|date\s+of\s+admit(?:tance|ission)?)"
+    r"\s*[:\-]?\s*(" + _DATE_ALT + r")",
+    re.IGNORECASE,
+)
+DISCHARGE_DATE_LABEL_RE = re.compile(
+    r"\b(?:discharge(?:d)?(?:\s+date)?|date\s+of\s+discharge)"
+    r"\s*[:\-]?\s*(" + _DATE_ALT + r")",
+    re.IGNORECASE,
+)
+
+REGEX_WINDOW_WORDS = 60
+
 
 def normalize_date(date_str: str, reference_date: Optional[str] = None) -> str:
     """Normalize to MM-DD-YYYY."""
@@ -257,7 +281,7 @@ def to_iso_date(mm_dd_yyyy: str) -> Optional[str]:
     return f"{year}-{month}-{day}"
 
 
-def _slice_first_n_words(text: str, n: int = 60) -> str:
+def _slice_first_n_words(text: str, n: int = REGEX_WINDOW_WORDS) -> str:
     count = 0
     end_idx = None
     for m in re.finditer(r"\b\w+\b", text):
@@ -266,6 +290,151 @@ def _slice_first_n_words(text: str, n: int = 60) -> str:
             end_idx = m.end()
             break
     return text if end_idx is None else text[:end_idx]
+
+
+def _slice_last_n_words(text: str, n: int = REGEX_WINDOW_WORDS) -> str:
+    """Bottom / end-of-page window (same ~50–60 word budget as the top)."""
+    matches = list(re.finditer(r"\b\w+\b", text))
+    if len(matches) <= n:
+        return text
+    start_idx = matches[-n].start()
+    return text[start_idx:]
+
+
+def _hit_rank(hit: Optional[dict]) -> int:
+    """Higher = better. Prefer admit+discharge pairs over single-date hits."""
+    if not hit or not hit.get("dos_from") or hit["dos_from"] == "unknown":
+        return -1
+    mt = hit.get("match_type") or ""
+    if mt in ("regex_admit_discharge", "regex_range", "admit_discharge_label"):
+        return 3
+    if mt in ("admit_label", "discharge_label"):
+        return 2
+    if mt == "date_outpatient_inpatient":
+        return 2
+    return 1
+
+
+def _merge_dos_hits(*hits: Optional[dict]) -> Optional[dict]:
+    """Pick best hit; if one window has From and another To, combine them."""
+    valid = [h for h in hits if h and h.get("dos_from") and h["dos_from"] != "unknown"]
+    if not valid:
+        return None
+
+    best = max(valid, key=_hit_rank)
+    if best.get("match_type") in (
+        "regex_admit_discharge",
+        "regex_range",
+        "admit_discharge_label",
+    ):
+        return best
+
+    from_hit = next(
+        (
+            h
+            for h in valid
+            if (h.get("keyword") or "").upper().split("+")[0] in FROM_KEYWORDS
+            or any(
+                part.strip().upper() in FROM_KEYWORDS
+                for part in (h.get("keyword") or "").split("+")
+            )
+        ),
+        None,
+    )
+    to_hit = next(
+        (
+            h
+            for h in valid
+            if any(
+                part.strip().upper() in TO_KEYWORDS
+                for part in (h.get("keyword") or "").split("+")
+            )
+        ),
+        None,
+    )
+    # Prefer labeled admit/discharge merges across windows
+    labeled_from = next(
+        (h for h in valid if h.get("match_type") == "admit_label"), None
+    )
+    labeled_to = next(
+        (h for h in valid if h.get("match_type") == "discharge_label"), None
+    )
+    if labeled_from and labeled_to:
+        return {
+            "dos_from": labeled_from["dos_from"],
+            "dos_to": labeled_to["dos_from"],
+            "raw_date": f"{labeled_from['dos_from']} → {labeled_to['dos_from']}",
+            "keyword": "Admit+Discharge",
+            "match_type": "admit_discharge_label",
+        }
+    if from_hit and to_hit and from_hit is not to_hit:
+        return {
+            "dos_from": from_hit["dos_from"],
+            "dos_to": to_hit.get("dos_to") or to_hit["dos_from"],
+            "raw_date": f"{from_hit['dos_from']} → {to_hit['dos_from']}",
+            "keyword": f"{from_hit.get('keyword')}+{to_hit.get('keyword')}",
+            "match_type": "regex_admit_discharge",
+        }
+    return best
+
+
+def extract_admit_discharge_labels(text: str) -> Optional[dict]:
+    """Find Admit … <date> and/or Discharge … <date> labeled patterns."""
+    if not text or not text.strip():
+        return None
+
+    admit_m = ADMIT_DATE_LABEL_RE.search(text)
+    discharge_m = DISCHARGE_DATE_LABEL_RE.search(text)
+
+    admit_norm = normalize_date(admit_m.group(1)) if admit_m else None
+    discharge_norm = normalize_date(discharge_m.group(1)) if discharge_m else None
+    if admit_norm == "unknown":
+        admit_norm = None
+    if discharge_norm == "unknown":
+        discharge_norm = None
+
+    if admit_norm and discharge_norm:
+        return {
+            "dos_from": admit_norm,
+            "dos_to": discharge_norm,
+            "raw_date": f"{admit_m.group(0)} / {discharge_m.group(0)}",
+            "keyword": "Admit+Discharge",
+            "match_type": "admit_discharge_label",
+        }
+    if admit_norm:
+        return {
+            "dos_from": admit_norm,
+            "dos_to": admit_norm,
+            "raw_date": admit_m.group(0),
+            "keyword": "Admit",
+            "match_type": "admit_label",
+        }
+    if discharge_norm:
+        return {
+            "dos_from": discharge_norm,
+            "dos_to": discharge_norm,
+            "raw_date": discharge_m.group(0),
+            "keyword": "Discharge",
+            "match_type": "discharge_label",
+        }
+    return None
+
+
+def extract_dos_from_page_text(page_text: str) -> Optional[dict]:
+    """
+    Regex DOS using top + bottom ~60-word windows, plus Admit/Discharge
+    labeled date patterns (bottom first, then full page).
+    """
+    first_60 = _slice_first_n_words(page_text, REGEX_WINDOW_WORDS)
+    last_60 = _slice_last_n_words(page_text, REGEX_WINDOW_WORDS)
+
+    # Bottom first — encounter dates often sit at end of page
+    bottom_labels = extract_admit_discharge_labels(last_60)
+    full_labels = extract_admit_discharge_labels(page_text)
+    top_hit = extract_date_with_keyword_info(first_60)
+    bottom_hit = extract_date_with_keyword_info(last_60)
+
+    return _merge_dos_hits(bottom_labels, full_labels, bottom_hit, top_hit)
 
 
 def _combined_date_regex() -> re.Pattern[str]:
@@ -356,13 +525,12 @@ def detect_dos_per_page(
         if cleaned == "UNACCEPT":
             break
 
-        first_60 = _slice_first_n_words(page_text, 60)
         page_from: Optional[str] = None
         page_to: Optional[str] = None
         match_type = ""
         keyword: Optional[str] = None
 
-        regex_hit = extract_date_with_keyword_info(first_60)
+        regex_hit = extract_dos_from_page_text(page_text)
         if regex_hit and regex_hit.get("dos_from") and regex_hit["dos_from"] != "unknown":
             page_from = regex_hit["dos_from"]
             page_to = regex_hit.get("dos_to") or page_from
@@ -597,7 +765,13 @@ def extract_dos_range_with_llm(
     if client is None or not page_text.strip():
         return None
 
-    snippet = _slice_first_n_words(page_text, 120)
+    # Prefer end-of-page text (last ~60 words) plus a short top window
+    top = _slice_first_n_words(page_text, REGEX_WINDOW_WORDS)
+    bottom = _slice_last_n_words(page_text, REGEX_WINDOW_WORDS)
+    if top.strip() == bottom.strip():
+        snippet = top
+    else:
+        snippet = f"[TOP]\n{top}\n\n[BOTTOM]\n{bottom}"
     today_str = datetime.now().strftime("%m-%d-%Y")
     mode = (
         "This looks like a discharge / inpatient note. Extract BOTH "

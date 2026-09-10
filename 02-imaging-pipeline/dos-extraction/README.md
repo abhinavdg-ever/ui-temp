@@ -2,6 +2,12 @@
 
 One **CSV row per page**.
 
+## Regex window
+
+- Scans **first and last ~60 words** of each page (dates often sit at the bottom).
+- Also matches labeled **Admit / Admission … date** and **Discharge … date** patterns.
+- Admit + Discharge → `dos_from` / `dos_to`; single date → from == to.
+
 ## Page vs document DOS
 
 | Fields | When filled |

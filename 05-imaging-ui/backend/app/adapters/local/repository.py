@@ -675,6 +675,7 @@ class LocalFolderRepository(FolderRepository):
             index_member_extraction_rows,
             index_rotation_rows,
             load_verification,
+            load_verifications,
             overlay_fields,
             read_csv_rows,
             monorepo_root_from_data,
@@ -797,10 +798,12 @@ class LocalFolderRepository(FolderRepository):
             ]
 
         verification = load_verification(ver_rows, chart)
+        verifications = load_verifications(ver_rows, chart)
 
         return ImagingDocumentResponse(
             folder_id=folder_id,
             manifest=manifest,
             verification=verification,
+            verifications=verifications,
             pages=imaging_pages,
         )

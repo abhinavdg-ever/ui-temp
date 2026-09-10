@@ -25,8 +25,8 @@ id,chart_id,page_name,extracted_name,extracted_dob,extracted_ssn,confidence,prov
 
 | Column | Imaging UI |
 |--------|------------|
-| `extracted_name` | Member Name |
-| `extracted_dob` | Member DOB |
+| `extracted_name` | Extracted Name (Page Details + Doc Summary) |
+| `extracted_dob` | Extracted DOB |
 | `provided_id` / `matched_id` | Member ID (prefer matched, else provided) |
 | `confidence` | Member confidence |
 
@@ -37,14 +37,14 @@ id,chart_id,page_name,extracted_name,extracted_dob,extracted_ssn,confidence,prov
 ## `member_verification_summary.csv` (doc)
 
 ```csv
-id,chart_id,final_status,matched_member_info,matched_confidence,pages_matched,pages_checked,decision_reason
+id,chart_id,final_status,matched_confidence,pages_matched,pages_checked,decision_reason
 ```
 
-| Column | Imaging UI |
-|--------|------------|
-| `final_status` | Verification status (Accept / Reject) |
-| `matched_confidence` | Doc-level match confidence |
-| `decision_reason` | Reason text |
-| `pages_matched` / `pages_checked` | Coverage |
+| Column | Imaging UI (Doc Summary → Rejection Rules) |
+|--------|--------------------------------------------|
+| `final_status` | Status |
+| `matched_confidence` | Confidence |
+| `pages_matched` / `pages_checked` | Pages Matched (`n/m`) |
+| `decision_reason` | Decision Reason |
 
-Shown on the Imaging status strip when present.
+`matched_member_info` is not used.

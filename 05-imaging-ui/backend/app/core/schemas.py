@@ -98,7 +98,6 @@ class ImagingVerificationDetails(BaseModel):
     """Doc-level member_verification_summary fields."""
 
     finalStatus: str | None = None
-    matchedMemberInfo: str | None = None
     matchedConfidence: float | None = None
     pagesMatched: int | None = None
     pagesChecked: int | None = None
@@ -109,6 +108,7 @@ class ImagingDocumentResponse(BaseModel):
     folder_id: str
     manifest: ImagingManifestDetails = Field(default_factory=ImagingManifestDetails)
     verification: ImagingVerificationDetails | None = None
+    verifications: list[ImagingVerificationDetails] = Field(default_factory=list)
     pages: list[ImagingPageResult] = Field(default_factory=list)
 
 

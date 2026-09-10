@@ -260,10 +260,12 @@ def index_member_extraction_rows(
     return by_key
 
 
-def load_verification(
+def load_verifications(
     rows: list[dict[str, str]], chart_name: str
-) -> ImagingVerificationDetails | None:
+) -> list[ImagingVerificationDetails]:
+    """All member_verification_summary rows for this chart."""
     cid = chart_id_key(chart_name)
+    out: list[ImagingVerificationDetails] = []
     for row in rows:
         row_chart = (row.get("chart_id") or row.get("chart_name") or "").strip()
         if row_chart and row_chart not in {chart_name, cid}:
@@ -271,19 +273,29 @@ def load_verification(
                 continue
         status = (row.get("final_status") or "").strip() or None
         reason = (row.get("decision_reason") or "").strip() or None
-        info = (row.get("matched_member_info") or "").strip() or None
         conf = _parse_float(row.get("matched_confidence"))
         pm = (row.get("pages_matched") or "").strip()
         pc = (row.get("pages_checked") or "").strip()
-        return ImagingVerificationDetails(
-            finalStatus=status,
-            matchedMemberInfo=info,
-            matchedConfidence=conf,
-            pagesMatched=int(pm) if pm.isdigit() else None,
-            pagesChecked=int(pc) if pc.isdigit() else None,
-            decisionReason=reason,
+        # Skip completely empty rows (header-only files)
+        if not any([status, reason, conf is not None, pm, pc]):
+            continue
+        out.append(
+            ImagingVerificationDetails(
+                finalStatus=status,
+                matchedConfidence=conf,
+                pagesMatched=int(pm) if pm.isdigit() else None,
+                pagesChecked=int(pc) if pc.isdigit() else None,
+                decisionReason=reason,
+            )
         )
-    return None
+    return out
+
+
+def load_verification(
+    rows: list[dict[str, str]], chart_name: str
+) -> ImagingVerificationDetails | None:
+    items = load_verifications(rows, chart_name)
+    return items[0] if items else None
 
 
 def _put_page_keys(

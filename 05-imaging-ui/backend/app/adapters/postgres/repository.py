@@ -293,11 +293,13 @@ class PostgresFolderRepository(FolderRepository):
                 folder_id=doc.folder_id,
                 manifest=db_manifest,
                 verification=doc.verification,
+                verifications=doc.verifications,
                 pages=pages,
             )
         return ImagingDocumentResponse(
             folder_id=doc.folder_id,
             manifest=doc.manifest,
             verification=doc.verification,
+            verifications=doc.verifications,
             pages=pages,
         )
