@@ -54,7 +54,7 @@ type Props = {
 };
 
 function fmt(value: string | number | boolean | null | undefined): string {
-  if (value === null || value === undefined || value === "") return "not found";
+  if (value === null || value === undefined || value === "") return "Not Found";
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (typeof value === "number") {
     return Number.isInteger(value) ? String(value) : value.toFixed(2);
@@ -73,7 +73,7 @@ function fmtPagesMatched(v: ImagingVerificationDetails): string {
     return `${v.pagesMatched}/${v.pagesChecked}`;
   }
   if (v.pagesMatched != null) return String(v.pagesMatched);
-  return "not found";
+  return "Not Found";
 }
 
 function DetailSection({
@@ -102,7 +102,7 @@ function DetailSection({
               <th scope="row">{row.label}</th>
               <td>{row.value}</td>
               {showConfidence ? (
-                <td>{row.confidence ?? "not found"}</td>
+                <td>{row.confidence ?? "Not Found"}</td>
               ) : null}
             </tr>
           ))}
@@ -112,7 +112,13 @@ function DetailSection({
   );
 }
 
-function ManifestDetails({ manifest }: { manifest: ImagingManifestDetails }) {
+function ManifestDetails({
+  manifest,
+  verification,
+}: {
+  manifest: ImagingManifestDetails;
+  verification?: ImagingVerificationDetails | null;
+}) {
   return (
     <div className="imaging-manifest-stack">
       <div className="imaging-manifest-row" role="group" aria-label="Manifest details">
@@ -126,6 +132,40 @@ function ManifestDetails({ manifest }: { manifest: ImagingManifestDetails }) {
           <strong>Member ID:</strong> {fmt(manifest.memberId)}
         </span>
       </div>
+      {verification ? (
+        <div
+          className={`imaging-manifest-row imaging-verification-row ${
+            (verification.finalStatus || "").toLowerCase() === "reject"
+              ? "is-reject"
+              : (verification.finalStatus || "").toLowerCase() === "accept"
+                ? "is-accept"
+                : ""
+          }`}
+          role="group"
+          aria-label="Overall member verification"
+        >
+          <span>
+            <strong>Overall Verification:</strong> {fmt(verification.finalStatus)}
+          </span>
+          {verification.matchedName ? (
+            <span>
+              <strong>Matched:</strong> {verification.matchedName}
+            </span>
+          ) : null}
+          <span>
+            <strong>Confidence:</strong>{" "}
+            {fmtConfidence(verification.matchedConfidence)}
+          </span>
+          <span>
+            <strong>Pages:</strong> {fmtPagesMatched(verification)}
+          </span>
+          {verification.decisionReason ? (
+            <span className="imaging-verification-reason">
+              <strong>Reason:</strong> {verification.decisionReason}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -240,6 +280,7 @@ function RejectionRulesTable({
       <thead>
         <tr>
           <th scope="col">Status</th>
+          <th scope="col">Matched Name</th>
           <th scope="col">Pages Matched</th>
           <th scope="col">Confidence</th>
           <th scope="col">Decision Reason</th>
@@ -249,6 +290,7 @@ function RejectionRulesTable({
         {rows.map((v, idx) => (
           <tr key={`${v.finalStatus ?? "row"}-${idx}`}>
             <td>{fmt(v.finalStatus)}</td>
+            <td>{fmt(v.matchedName)}</td>
             <td>{fmtPagesMatched(v)}</td>
             <td>{fmtConfidence(v.matchedConfidence)}</td>
             <td>{fmt(v.decisionReason)}</td>
@@ -392,10 +434,12 @@ export default function ImagingPanel({
         ? [document.verification]
         : [];
 
+  const overall = verifications[0] ?? null;
+
   if (tab === "doc") {
     return (
       <div className="imaging-panel-stack">
-        <ManifestDetails manifest={manifest} />
+        <ManifestDetails manifest={manifest} verification={overall} />
         <DocSummary pages={document.pages} verifications={verifications} />
       </div>
     );
@@ -404,7 +448,7 @@ export default function ImagingPanel({
   if (!currentPage) {
     return (
       <div className="imaging-panel-stack">
-        <ManifestDetails manifest={manifest} />
+        <ManifestDetails manifest={manifest} verification={overall} />
         <div className="ocr-empty">
           {currentFileName
             ? `No imaging row for ${currentFileName}.`
@@ -416,7 +460,7 @@ export default function ImagingPanel({
 
   return (
     <div className="imaging-panel-stack">
-      <ManifestDetails manifest={manifest} />
+      <ManifestDetails manifest={manifest} verification={overall} />
       <PageDetails page={currentPage} />
     </div>
   );

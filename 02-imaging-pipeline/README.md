@@ -1,7 +1,7 @@
 # Imaging pipeline outputs → UI mapping
 
 Drop real CSVs into these folders (header row required). The Imaging UI reads them
-with **no dummy values** — missing fields show as `not found`.
+with **no dummy values** — missing fields show as `Not Found`.
 
 | Pack | Combined CSV | UI block |
 |------|--------------|----------|

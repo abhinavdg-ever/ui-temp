@@ -65,6 +65,8 @@ export type ImagingManifestDetails = {
 
 export type ImagingVerificationDetails = {
   finalStatus: string | null;
+  matchedName?: string | null;
+  matchedMemberId?: string | null;
   matchedConfidence: number | null;
   pagesMatched: number | null;
   pagesChecked: number | null;

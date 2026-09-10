@@ -98,6 +98,8 @@ class ImagingVerificationDetails(BaseModel):
     """Doc-level member_verification_summary fields."""
 
     finalStatus: str | None = None
+    matchedName: str | None = None
+    matchedMemberId: str | None = None
     matchedConfidence: float | None = None
     pagesMatched: int | None = None
     pagesChecked: int | None = None

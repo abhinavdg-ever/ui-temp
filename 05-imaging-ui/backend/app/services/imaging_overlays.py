@@ -212,21 +212,82 @@ def index_rotation_rows(
     return by_key
 
 
+def _chart_row_matches(row_chart: str, chart_name: str) -> bool:
+    """Match CSV chart_id to folder name (exact, prefix, or shared numeric id)."""
+    if not row_chart:
+        return True
+    cid = chart_id_key(chart_name)
+    if row_chart in {chart_name, cid}:
+        return True
+    if chart_name.startswith(row_chart + "_"):
+        return True
+    if row_chart.startswith(chart_name + "_"):
+        return True
+    # CSV full id vs folder full id already covered; numeric CSV vs full folder covered above
+    return False
+
+
+def _register_page_lookup_keys(
+    by_key: dict[str, dict[str, Any]],
+    fields: dict[str, Any],
+    *,
+    page_name: str = "",
+    page_num: str = "",
+) -> None:
+    """Index by page file name and/or page number (#N, N.jpg, …)."""
+    if page_name and page_name.upper() != "N/A":
+        by_key[page_name.lower()] = fields
+        by_key[Path(page_name).name.lower()] = fields
+        stem = Path(page_name).stem
+        by_key[stem.lower()] = fields
+        if stem.isdigit():
+            by_key[f"#{stem}"] = fields
+            by_key[f"{stem}.jpg"] = fields
+            by_key[f"{stem}.png"] = fields
+            by_key[f"{stem}.jpeg"] = fields
+            by_key[f"{stem}.tif"] = fields
+            by_key[f"{stem}.tiff"] = fields
+        elif page_name.isdigit():
+            by_key[f"#{page_name}"] = fields
+            by_key[f"{page_name}.jpg"] = fields
+            by_key[f"{page_name}.png"] = fields
+
+    num = page_num.strip()
+    if num.isdigit():
+        by_key[f"#{num}"] = fields
+        by_key[num] = fields
+        by_key[f"{num}.jpg"] = fields
+        by_key[f"{num}.png"] = fields
+        by_key[f"{num}.jpeg"] = fields
+        by_key[f"{num}.tif"] = fields
+        by_key[f"{num}.tiff"] = fields
+
+
 def index_member_extraction_rows(
     rows: list[dict[str, str]], chart_name: str
 ) -> dict[str, dict[str, Any]]:
-    cid = chart_id_key(chart_name)
+    """
+    Index member_extraction_results rows for one chart.
+
+    Match:
+      chart_id / chart_name  → folder name (exact or numeric prefix)
+      page_num / page_number / page_name → page file / page #
+
+    Values:
+      extracted_name, extracted_dob, confidence
+      Member ID: matched_id | provided_member_id | provided_id | external_member_id
+    """
     by_key: dict[str, dict[str, Any]] = {}
     for row in rows:
         row_chart = (row.get("chart_id") or row.get("chart_name") or "").strip()
-        if row_chart and row_chart not in {chart_name, cid}:
-            # allow numeric chart_id matching folder prefix
-            if not (chart_name.startswith(row_chart + "_") or chart_name == row_chart):
-                continue
+        if not _chart_row_matches(row_chart, chart_name):
+            continue
+
         name = (row.get("extracted_name") or "").strip()
         dob = (row.get("extracted_dob") or "").strip()
         member_id = (
             (row.get("matched_id") or "").strip()
+            or (row.get("provided_member_id") or "").strip()
             or (row.get("provided_id") or "").strip()
             or (row.get("external_member_id") or "").strip()
         )
@@ -236,6 +297,7 @@ def index_member_extraction_rows(
             dob = ""
         if member_id.upper() == "N/A":
             member_id = ""
+
         fields: dict[str, Any] = {
             "memberName": name or None,
             "memberDob": dob or None,
@@ -245,46 +307,69 @@ def index_member_extraction_rows(
         fields = {k: v for k, v in fields.items() if v is not None and v != ""}
         if not fields:
             continue
-        page_name = (row.get("page_name") or "").strip()
-        if page_name and page_name.upper() != "N/A":
-            by_key[page_name.lower()] = fields
-            # "1" → also key #1 and 1.jpg
-            if page_name.isdigit():
-                by_key[f"#{page_name}"] = fields
-                by_key[f"{page_name}.jpg"] = fields
-                by_key[f"{page_name}.png"] = fields
-            by_key[Path(page_name).name.lower()] = fields
-        raw_num = (row.get("page_number") or "").strip()
-        if raw_num.isdigit():
-            by_key[f"#{raw_num}"] = fields
+
+        page_name = (row.get("page_name") or row.get("filename") or "").strip()
+        page_num = (
+            (row.get("page_num") or "").strip()
+            or (row.get("page_number") or "").strip()
+        )
+        _register_page_lookup_keys(
+            by_key, fields, page_name=page_name, page_num=page_num
+        )
     return by_key
+
+
+def _parse_int(raw: str | None) -> int | None:
+    s = (raw or "").strip()
+    if not s:
+        return None
+    try:
+        return int(float(s))
+    except ValueError:
+        return None
 
 
 def load_verifications(
     rows: list[dict[str, str]], chart_name: str
 ) -> list[ImagingVerificationDetails]:
-    """All member_verification_summary rows for this chart."""
-    cid = chart_id_key(chart_name)
+    """
+    member_verification_summary rows for this chart.
+
+    Real export columns:
+      chart_id, final_status, matched_member_id, matched_name,
+      confidence (or matched_confidence), pages_matched, pages_checked, decision_reason
+    """
     out: list[ImagingVerificationDetails] = []
     for row in rows:
         row_chart = (row.get("chart_id") or row.get("chart_name") or "").strip()
-        if row_chart and row_chart not in {chart_name, cid}:
-            if not (chart_name.startswith(row_chart + "_") or chart_name == row_chart):
-                continue
-        status = (row.get("final_status") or "").strip() or None
+        if not _chart_row_matches(row_chart, chart_name):
+            continue
+        status = (row.get("final_status") or row.get("status") or "").strip() or None
         reason = (row.get("decision_reason") or "").strip() or None
-        conf = _parse_float(row.get("matched_confidence"))
-        pm = (row.get("pages_matched") or "").strip()
-        pc = (row.get("pages_checked") or "").strip()
+        matched_name = (row.get("matched_name") or "").strip() or None
+        matched_member_id = (
+            (row.get("matched_member_id") or "").strip()
+            or (row.get("matched_id") or "").strip()
+            or None
+        )
+        conf = _parse_float(
+            row.get("confidence") or row.get("matched_confidence")
+        )
+        pm = _parse_int(row.get("pages_matched"))
+        pc = _parse_int(row.get("pages_checked"))
         # Skip completely empty rows (header-only files)
-        if not any([status, reason, conf is not None, pm, pc]):
+        if not any(
+            [status, reason, matched_name, matched_member_id, conf is not None, pm is not None, pc is not None]
+        ):
             continue
         out.append(
             ImagingVerificationDetails(
                 finalStatus=status,
+                matchedName=matched_name,
+                matchedMemberId=matched_member_id,
                 matchedConfidence=conf,
-                pagesMatched=int(pm) if pm.isdigit() else None,
-                pagesChecked=int(pc) if pc.isdigit() else None,
+                pagesMatched=pm,
+                pagesChecked=pc,
                 decisionReason=reason,
             )
         )
@@ -334,7 +419,6 @@ def collect_rows(
     if not rows:
         return []
     key = chart_filter or chart_name
-    cid = chart_id_key(chart_name)
     filtered: list[dict[str, str]] = []
     for row in rows:
         # detect which id column exists
@@ -342,7 +426,7 @@ def collect_rows(
             val = (row.get(col) or "").strip()
             if not val:
                 continue
-            if val in {chart_name, key, cid} or chart_name.startswith(val + "_"):
+            if _chart_row_matches(val, chart_name) or val == key:
                 filtered.append(row)
                 break
     return filtered

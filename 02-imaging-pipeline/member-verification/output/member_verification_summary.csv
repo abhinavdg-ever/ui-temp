@@ -1,1 +1,1 @@
-id,chart_id,final_status,matched_confidence,pages_matched,pages_checked,decision_reason
+id,chart_id,final_status,matched_member_id,matched_name,confidence,pages_matched,pages_checked,decision_reason

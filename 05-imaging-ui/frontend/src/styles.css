@@ -1395,6 +1395,16 @@ input {
   background: #1f4d38;
 }
 
+.imaging-verification-row.is-accept {
+  border-color: #86efac;
+  background: #14532d;
+}
+
+.imaging-verification-row.is-reject {
+  border-color: #fca5a5;
+  background: #7f1d1d;
+}
+
 .imaging-verification-reason {
   flex: 1 1 100%;
   opacity: 0.92;
