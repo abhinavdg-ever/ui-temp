@@ -65,6 +65,7 @@ def resolve_pipeline_csv(data_root: Path, *combined_rel: str) -> Path:
     alt_names = {
         "hw_printed.csv": ("hw_printed_classification.csv", "hw_printed.csv"),
         "rotation.csv": ("rotation_orientation.csv", "rotation.csv"),
+        "junk_classification.csv": ("junk_classification.csv",),
     }
     flat_names = alt_names.get(filename, (filename,))
 
@@ -200,6 +201,8 @@ def page_has_imaging(page: ImagingPageResult) -> bool:
             page.dosFrom,
             page.dosTo,
             page.pageType,
+            page.blankOrJunk is not None,
+            page.isDuplicate is not None,
         ]
     )
 
@@ -506,6 +509,83 @@ def _put_page_keys(
     raw_num = (row.get("page_number") or "").strip()
     if raw_num.isdigit():
         by_key[f"#{raw_num}"] = fields
+
+
+def index_junk_rows(
+    rows: list[dict[str, str]], chart_name: str
+) -> dict[str, dict[str, Any]]:
+    """junk_classification.csv → blankOrJunk / isDuplicate / pageType (decoupled).
+
+    Blank or Junk and Duplicate are independent:
+      - Blank → Yes (Blank); Invoice/Cover → Yes (Junk)
+      - Duplicate → Blank/Junk = No, Is Duplicate = Yes (content may be valid)
+      - Main → No / No
+    Page Type: Invoice|Cover only; Blank / Duplicate / Main → Not Available.
+    """
+    by_key: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        cname = (
+            row.get("chart_name") or row.get("chart_id") or row.get("folder") or ""
+        ).strip()
+        if cname and not _chart_row_matches(cname, chart_name):
+            continue
+
+        label = (
+            row.get("page_classification")
+            or row.get("classification")
+            or row.get("page_type")
+            or ""
+        ).strip()
+        group = (row.get("page_group") or "").strip().lower()
+        if not label and not group:
+            continue
+
+        label_l = label.lower()
+        is_duplicate = label_l == "duplicate" or group == "duplicate"
+        is_blank = label_l == "blank"
+        is_typed_junk = label_l in {"invoice", "cover"}
+        # Legacy CSVs marked duplicate as page_group=junk — still not blank/junk in UI
+        is_blank_or_junk = is_blank or is_typed_junk or (
+            group == "junk" and not is_duplicate and label_l not in {"duplicate", "main", ""}
+        )
+
+        if is_blank:
+            blank_or_junk = "Yes (Blank)"
+        elif is_typed_junk or (is_blank_or_junk and not is_duplicate):
+            blank_or_junk = "Yes (Junk)"
+        else:
+            # Main, Duplicate, or unclassified junk group leftovers → not Blank/Junk
+            blank_or_junk = "No"
+
+        if is_typed_junk:
+            page_type = {"invoice": "Invoice", "cover": "Cover"}[label_l]
+        else:
+            page_type = "Not Available"
+
+        fields: dict[str, Any] = {
+            "blankOrJunk": blank_or_junk,
+            "isDuplicate": bool(is_duplicate),
+            "pageType": page_type,
+            "pageTypeConfidence": _parse_confidence(
+                row.get("page_classification_confidence")
+                or row.get("confidence")
+                or row.get("page_type_confidence")
+            ),
+        }
+        fields = {
+            k: v
+            for k, v in fields.items()
+            if v is not None or k in {"blankOrJunk", "isDuplicate"}
+        }
+        fields["isDuplicate"] = bool(is_duplicate)
+
+        _put_page_keys(by_key, row, fields)
+        raw_num = (row.get("page_num") or row.get("page_number") or "").strip()
+        if raw_num.isdigit():
+            by_key[f"#{raw_num}"] = fields
+            by_key[f"{raw_num}.jpg"] = fields
+            by_key[f"{raw_num}.png"] = fields
+    return by_key
 
 
 def collect_rows(

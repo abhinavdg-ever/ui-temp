@@ -59,6 +59,11 @@ export type ImagingPageResult = {
   dosConfidence: number | null;
   docDosFrom?: string | null;
   docDosTo?: string | null;
+  /** null = not classified yet → UI shows NA; else "Yes (Blank)" | "Yes (Junk)" | "No" */
+  blankOrJunk?: string | null;
+  /** null = not classified → NA */
+  isDuplicate?: boolean | null;
+  /** Blank/Main/Duplicate → Not Available; Invoice|Cover → type */
   pageType: string | null;
   pageTypeConfidence: number | null;
 };

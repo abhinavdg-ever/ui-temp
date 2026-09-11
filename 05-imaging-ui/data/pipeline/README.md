@@ -15,6 +15,7 @@ History status ignores Manifest:
 | **`rotation_orientation.csv`** | Rotation/tilt/mirrored (or `rotation.csv`) |
 | **`dos_extraction.csv`** | DOS |
 | **`member_extraction_results.csv`** and/or **`member_verification_summary.csv`** | Member (counts as **one** of the four) |
+| **`junk_classification.csv`** | Blank / Invoice / Cover / Duplicate (optional; not in status “4”) |
 
 - **Imaging Completed** — chart present in **all 4** above  
 - **Imaging in Progress** — chart present in **any 1+** of the four  
@@ -32,6 +33,7 @@ History status ignores Manifest:
   dos_extraction.csv
   member_extraction_results.csv
   member_verification_summary.csv
+  junk_classification.csv
   metadata_R1_B1.csv
 ```
 
@@ -61,6 +63,7 @@ cp ../02-imaging-pipeline/rotation-orientation/output/rotation_orientation.csv d
   2>/dev/null || cp ../02-imaging-pipeline/rotation-orientation/output/rotation.csv data/pipeline/
 cp ../02-imaging-pipeline/dos-extraction/output/dos_extraction.csv data/pipeline/
 cp ../02-imaging-pipeline/member-verification/output/member_*.csv data/pipeline/
+cp ../02-imaging-pipeline/junk-classification/output/junk_classification.csv data/pipeline/
 cp ../06-postgres-db/manifest/metadata_R*.csv data/pipeline/
 ```
 

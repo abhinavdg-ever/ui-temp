@@ -72,6 +72,12 @@ class ImagingPageResult(BaseModel):
     dosConfidence: float | None = None
     docDosFrom: str | None = None
     docDosTo: str | None = None
+    # None = classification not run → UI shows NA
+    # Values: "Yes (Blank)" | "Yes (Junk)" | "No"
+    blankOrJunk: str | None = None
+    # None = not run → NA; True/False when classified
+    isDuplicate: bool | None = None
+    # Blank / Main / Duplicate → "Not Available"; Invoice|Cover → that label
     pageType: str | None = None
     pageTypeConfidence: float | None = None
 

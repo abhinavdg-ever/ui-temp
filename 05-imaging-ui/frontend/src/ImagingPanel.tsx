@@ -74,6 +74,22 @@ function fmtConfidence(value: number | null | undefined): string {
   return `${pct.toFixed(1)}%`;
 }
 
+function fmtBlankOrJunk(value: string | boolean | null | undefined): string {
+  if (value === null || value === undefined || value === "") return "NA";
+  if (typeof value === "boolean") return value ? "Yes (Junk)" : "No";
+  return String(value);
+}
+
+function fmtYesNoNA(value: boolean | null | undefined): string {
+  if (value === null || value === undefined) return "NA";
+  return value ? "Yes" : "No";
+}
+
+function fmtPageType(value: string | null | undefined): string {
+  if (value === null || value === undefined || value === "") return "Not Available";
+  return String(value);
+}
+
 function fmtPagesMatched(v: ImagingVerificationDetails): string {
   if (v.pagesMatched != null && v.pagesChecked != null) {
     return `${v.pagesMatched}/${v.pagesChecked}`;
@@ -220,8 +236,18 @@ function PageDetails({ page }: { page: ImagingPageResult }) {
         showConfidence
         rows={[
           {
+            label: "Blank or Junk",
+            value: fmtBlankOrJunk(page.blankOrJunk),
+            confidence: fmtConfidence(page.pageTypeConfidence),
+          },
+          {
+            label: "Is Duplicate",
+            value: fmtYesNoNA(page.isDuplicate),
+            confidence: fmtConfidence(page.pageTypeConfidence),
+          },
+          {
             label: "Page Type",
-            value: fmt(page.pageType),
+            value: fmtPageType(page.pageType),
             confidence: fmtConfidence(page.pageTypeConfidence),
           },
         ]}
@@ -329,6 +355,8 @@ function DocSummary({
               <th scope="col">Mirrored</th>
               <th scope="col">DOS From</th>
               <th scope="col">DOS To</th>
+              <th scope="col">Blank/Junk</th>
+              <th scope="col">Duplicate</th>
               <th scope="col">Page Type</th>
               {showConfidence ? (
                 <>
@@ -354,7 +382,9 @@ function DocSummary({
                 <td>{fmt(p.mirrored)}</td>
                 <td>{fmt(p.dosFrom)}</td>
                 <td>{fmt(p.dosTo)}</td>
-                <td>{fmt(p.pageType)}</td>
+                <td>{fmtBlankOrJunk(p.blankOrJunk)}</td>
+                <td>{fmtYesNoNA(p.isDuplicate)}</td>
+                <td>{fmtPageType(p.pageType)}</td>
                 {showConfidence ? (
                   <>
                     <td>{fmtConfidence(p.memberConfidence)}</td>

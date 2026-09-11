@@ -342,6 +342,13 @@ class LocalFolderRepository(FolderRepository):
                 "output",
                 "member_verification_summary.csv",
             ),
+            resolve_pipeline_csv(
+                self.data_root,
+                "02-imaging-pipeline",
+                "junk-classification",
+                "output",
+                "junk_classification.csv",
+            ),
         ]
         for path in combined_files:
             for row in read_csv_rows(path):
@@ -952,6 +959,7 @@ class LocalFolderRepository(FolderRepository):
             empty_imaging_pages,
             index_dos_rows,
             index_hw_rows,
+            index_junk_rows,
             index_member_extraction_rows,
             index_rotation_rows,
             load_verification,
@@ -1041,6 +1049,24 @@ class LocalFolderRepository(FolderRepository):
                         "member-verification",
                         "output",
                         "member_extraction_results.csv",
+                    ),
+                    chart_name=chart,
+                ),
+                chart,
+            ),
+        )
+        imaging_pages = overlay_fields(
+            imaging_pages,
+            index_junk_rows(
+                collect_rows(
+                    folder_dir=folder_dir,
+                    data_root=self.data_root,
+                    per_chart_name=f"{chart}_junk.csv",
+                    combined_rel=(
+                        "02-imaging-pipeline",
+                        "junk-classification",
+                        "output",
+                        "junk_classification.csv",
                     ),
                     chart_name=chart,
                 ),
