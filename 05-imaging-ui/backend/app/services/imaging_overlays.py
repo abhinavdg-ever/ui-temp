@@ -137,15 +137,35 @@ def _fmt_dos_display(raw: str | date | None) -> str | None:
 def dos_row_fields(row: dict[str, str]) -> dict[str, str | None]:
     dos_from = _fmt_dos_display(row.get("dos_from_iso") or row.get("dos_from") or row.get("dos"))
     dos_to = _fmt_dos_display(row.get("dos_to_iso") or row.get("dos_to") or "")
+    # Multi-date lists (comma-separated) — format each part for display
+    raw_from = (row.get("dos_from") or "").strip()
+    raw_to = (row.get("dos_to") or "").strip()
+    if "," in raw_from:
+        parts = [_fmt_dos_display(p.strip()) for p in raw_from.split(",")]
+        dos_from = ", ".join(p for p in parts if p)
+    if "," in raw_to:
+        parts = [_fmt_dos_display(p.strip()) for p in raw_to.split(",")]
+        dos_to = ", ".join(p for p in parts if p)
     if dos_from and not dos_to and (row.get("dos_from") or row.get("dos_from_iso") or row.get("dos")):
         dos_to = dos_from
+
+    doc_from_raw = (row.get("doc_dos_from") or "").strip()
+    doc_to_raw = (row.get("doc_dos_to") or "").strip()
+    doc_from = _fmt_dos_display(row.get("doc_dos_from_iso") or row.get("doc_dos_from") or "")
+    doc_to = _fmt_dos_display(row.get("doc_dos_to_iso") or row.get("doc_dos_to") or "")
+    if "," in doc_from_raw:
+        parts = [_fmt_dos_display(p.strip()) for p in doc_from_raw.split(",")]
+        doc_from = ", ".join(p for p in parts if p)
+    if "," in doc_to_raw:
+        parts = [_fmt_dos_display(p.strip()) for p in doc_to_raw.split(",")]
+        doc_to = ", ".join(p for p in parts if p)
+
     return {
         "dosFrom": dos_from,
         "dosTo": dos_to,
-        "docDosFrom": _fmt_dos_display(
-            row.get("doc_dos_from_iso") or row.get("doc_dos_from") or ""
-        ),
-        "docDosTo": _fmt_dos_display(row.get("doc_dos_to_iso") or row.get("doc_dos_to") or ""),
+        "docDosFrom": doc_from,
+        "docDosTo": doc_to,
+        "dosConfidence": _parse_confidence(row.get("confidence")),
     }
 
 
@@ -516,13 +536,30 @@ def index_junk_rows(
 ) -> dict[str, dict[str, Any]]:
     """junk_classification.csv → blankOrJunk / isDuplicate / pageType (decoupled).
 
-    Blank or Junk and Duplicate are independent:
-      - Blank → Yes (Blank); Invoice/Cover → Yes (Junk)
-      - Duplicate → Blank/Junk = No, Is Duplicate = Yes (content may be valid)
-      - Main → No / No
-    Page Type: Invoice|Cover only; Blank / Duplicate / Main → Not Available.
+    Blank or Junk and Duplicate are independent.
+    Page Type shows junk subtype labels (Invoice, Cover Page, …).
     """
     by_key: dict[str, dict[str, Any]] = {}
+    # Canonical UI labels (lowercase key → display)
+    page_type_labels = {
+        "invoice": "Invoice",
+        "cover": "Cover Page",
+        "cover page": "Cover Page",
+        "record request/transmittal": "Record Request/Transmittal",
+        "record request": "Record Request/Transmittal",
+        "transmittal": "Record Request/Transmittal",
+        "instructions": "Instructions",
+        "others": "Others",
+        "letter/fax": "Letter/Fax",
+        "letter": "Letter/Fax",
+        "fax": "Letter/Fax",
+    }
+    junk_label_keys = set(page_type_labels.keys()) | {
+        "cover_page",
+        "record_request",
+        "letter_fax",
+    }
+
     for row in rows:
         cname = (
             row.get("chart_name") or row.get("chart_id") or row.get("folder") or ""
@@ -543,24 +580,23 @@ def index_junk_rows(
         label_l = label.lower()
         is_duplicate = label_l == "duplicate" or group == "duplicate"
         is_blank = label_l == "blank"
-        is_typed_junk = label_l in {"invoice", "cover"}
-        # Legacy CSVs marked duplicate as page_group=junk — still not blank/junk in UI
-        is_blank_or_junk = is_blank or is_typed_junk or (
-            group == "junk" and not is_duplicate and label_l not in {"duplicate", "main", ""}
+        is_typed_junk = (
+            label_l in junk_label_keys
+            or label_l in page_type_labels
+            or (group == "junk" and not is_duplicate and not is_blank)
         )
 
         if is_blank:
             blank_or_junk = "Yes (Blank)"
-        elif is_typed_junk or (is_blank_or_junk and not is_duplicate):
+        elif is_typed_junk and not is_duplicate:
             blank_or_junk = "Yes (Junk)"
         else:
-            # Main, Duplicate, or unclassified junk group leftovers → not Blank/Junk
             blank_or_junk = "No"
 
-        if is_typed_junk:
-            page_type = {"invoice": "Invoice", "cover": "Cover"}[label_l]
-        else:
+        if is_blank or is_duplicate or label_l in {"main", "none", ""}:
             page_type = "Not Available"
+        else:
+            page_type = page_type_labels.get(label_l, label if is_typed_junk else "Not Available")
 
         fields: dict[str, Any] = {
             "blankOrJunk": blank_or_junk,

@@ -1,12 +1,12 @@
 """
 DOS (Date of Service) extraction — ported from advantmed-autocoderai-new/scripts/split.py.
 
-Per page (first + last ~60 words for regex; fuller snippet for gated LLM):
-  1) regex + visit / Admit / Discharge keywords → dos_from / dos_to
-     (prefer bottom-of-page window when dates live at the end)
-  2) Azure OpenAI only if page has a clinical section cue
-     (Chief Complaint, HPI, Discharge Note, …)
-  3) For discharge / inpatient spans, LLM extracts both from and to
+Per page (full-page regex; optional gated LLM):
+  1) regex + visit / Admit / Discharge keywords on the **full page** → dos_from / dos_to
+  2) multiple dates in the same year → list them (comma-separated); confidence 0.60
+  3) single hit in top/bottom ~60 words → 0.95; only in middle (full page) → 0.70
+  4) hardcoded preamble default 02-02-2022 → confidence 0.80
+  5) Azure OpenAI only if page has a clinical section cue (optional --llm)
 """
 
 from __future__ import annotations
@@ -173,6 +173,12 @@ NON_ENCOUNTER_CUE = re.compile(
 # Preamble / non-encounter / before-first-DOS default
 DEFAULT_DOC_DOS = "02-02-2022"
 DEFAULT_DOC_DOS_ISO = "2022-02-02"
+
+# Confidence: edge-window 95%; full-page (middle) 70%; multi same-year 60%; hardcoded default 80%
+CONF_EDGE = 0.95
+CONF_FULL_PAGE = 0.70
+CONF_MULTI = 0.60
+CONF_DEFAULT = 0.80
 
 UI_PAGE_MARKER_RE = re.compile(r"^=====\s*(.+?)\s*=====\s*$", re.MULTILINE)
 AUTOCODER_PAGE_RE = re.compile(
@@ -420,21 +426,143 @@ def extract_admit_discharge_labels(text: str) -> Optional[dict]:
     return None
 
 
+def _year_of(norm: str) -> Optional[int]:
+    """MM-DD-YYYY → year int."""
+    parts = (norm or "").split("-")
+    if len(parts) == 3 and parts[2].isdigit() and len(parts[2]) == 4:
+        return int(parts[2])
+    return None
+
+
+def _sort_norm_dates(dates: list[str]) -> list[str]:
+    def key(d: str) -> tuple:
+        y = _year_of(d) or 0
+        parts = d.split("-")
+        try:
+            return (y, int(parts[0]), int(parts[1]))
+        except (ValueError, IndexError):
+            return (y, 0, 0)
+
+    return sorted(set(dates), key=key)
+
+
+def _collect_keyword_dates(text: str) -> list[tuple[str, str]]:
+    """All (normalized_date, keyword) hits on full text (not just first)."""
+    if not text or not text.strip():
+        return []
+    text_lower = text.lower()
+    found: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    for keyword in VISIT_KEYWORDS:
+        hit = _date_after_keyword(text, text_lower, keyword)
+        if not hit:
+            continue
+        norm, _raw = hit
+        if "|" in norm:
+            a, b = norm.split("|", 1)
+            for part in (a, b):
+                if part != "unknown" and part not in seen:
+                    seen.add(part)
+                    found.append((part, keyword))
+            continue
+        if norm == "unknown" or norm in seen:
+            continue
+        seen.add(norm)
+        found.append((norm, keyword))
+    return found
+
+
 def extract_dos_from_page_text(page_text: str) -> Optional[dict]:
     """
-    Regex DOS using top + bottom ~60-word windows, plus Admit/Discharge
-    labeled date patterns (bottom first, then full page).
+    Regex DOS on the **full page** (DOS can sit in the middle).
+
+    - Single clear hit also visible in top/bottom ~60 words → confidence 0.95
+    - Hit only via full-page (middle) scan → confidence 0.70
+    - Multiple same-year dates → confidence 0.60
     """
+    if not page_text or not page_text.strip():
+        return None
+
     first_60 = _slice_first_n_words(page_text, REGEX_WINDOW_WORDS)
     last_60 = _slice_last_n_words(page_text, REGEX_WINDOW_WORDS)
+    edge_hit = _merge_dos_hits(
+        extract_admit_discharge_labels(last_60),
+        extract_admit_discharge_labels(first_60),
+        extract_date_with_keyword_info(last_60),
+        extract_date_with_keyword_info(first_60),
+    )
 
-    # Bottom first — encounter dates often sit at end of page
-    bottom_labels = extract_admit_discharge_labels(last_60)
     full_labels = extract_admit_discharge_labels(page_text)
-    top_hit = extract_date_with_keyword_info(first_60)
-    bottom_hit = extract_date_with_keyword_info(last_60)
+    # Prefer explicit Admit+Discharge range on full page
+    if full_labels and full_labels.get("match_type") == "admit_discharge_label":
+        edge_same = (
+            edge_hit
+            and edge_hit.get("dos_from") == full_labels.get("dos_from")
+            and (edge_hit.get("dos_to") or edge_hit.get("dos_from"))
+            == full_labels.get("dos_to")
+        )
+        out = dict(full_labels)
+        out["confidence"] = CONF_EDGE if edge_same else CONF_FULL_PAGE
+        return out
 
-    return _merge_dos_hits(bottom_labels, full_labels, bottom_hit, top_hit)
+    keyword_dates = _collect_keyword_dates(page_text)
+    # Also fold in single-side admit/discharge labels
+    if full_labels:
+        for key in ("dos_from", "dos_to"):
+            val = full_labels.get(key)
+            if val and val != "unknown":
+                keyword_dates.append((val, full_labels.get("keyword") or "label"))
+
+    norms = _sort_norm_dates([d for d, _ in keyword_dates if d and d != "unknown"])
+    if not norms and edge_hit:
+        out = dict(edge_hit)
+        out["confidence"] = CONF_EDGE
+        return out
+    if not norms:
+        return None
+
+    # Prefer dates sharing one year (most common year among hits)
+    years = [_year_of(d) for d in norms if _year_of(d) is not None]
+    if years:
+        year_counts: dict[int, int] = {}
+        for y in years:
+            year_counts[y] = year_counts.get(y, 0) + 1
+        dominant_year = max(year_counts.items(), key=lambda t: (t[1], t[0]))[0]
+        same_year = [d for d in norms if _year_of(d) == dominant_year]
+    else:
+        same_year = norms
+
+    edge_norms: set[str] = set()
+    if edge_hit:
+        for key in ("dos_from", "dos_to"):
+            v = edge_hit.get(key)
+            if v and v != "unknown":
+                edge_norms.add(v)
+
+    if len(same_year) == 1:
+        d = same_year[0]
+        in_edge = d in edge_norms
+        return {
+            "dos_from": d,
+            "dos_to": d,
+            "raw_date": d,
+            "keyword": keyword_dates[0][1] if keyword_dates else None,
+            "match_type": "regex" if in_edge else "regex_full_page",
+            "confidence": CONF_EDGE if in_edge else CONF_FULL_PAGE,
+        }
+
+    # Multiple dates around the same year → list them all
+    listed = ", ".join(same_year)
+    return {
+        "dos_from": listed,
+        "dos_to": listed,
+        "raw_date": listed,
+        "keyword": "MULTIPLE_SAME_YEAR",
+        "match_type": "regex_multi_same_year",
+        "confidence": CONF_MULTI,
+        "dos_dates": same_year,
+    }
 
 
 def _combined_date_regex() -> re.Pattern[str]:
@@ -465,6 +593,7 @@ def _hit(
     keyword: Optional[str] = None,
     doc_dos_from: Optional[str] = None,
     doc_dos_to: Optional[str] = None,
+    confidence: Optional[float] = None,
 ) -> dict:
     # Page-level: blank when not extracted on this page
     page_from = dos_from if dos_from and dos_from != "unknown" else None
@@ -475,19 +604,33 @@ def _hit(
     d_from = doc_dos_from or page_from
     d_to = doc_dos_to or page_to or d_from
 
+    # ISO: first/last when comma-separated multi dates
+    def _first_iso(raw: Optional[str]) -> str:
+        if not raw:
+            return ""
+        first = raw.split(",")[0].strip()
+        return to_iso_date(first) if first else ""
+
+    def _last_iso(raw: Optional[str]) -> str:
+        if not raw:
+            return ""
+        last = raw.split(",")[-1].strip()
+        return to_iso_date(last) if last else ""
+
     return {
         "page_name": page_label,
         "page_number": page_number,
         "dos_from": page_from or "",
         "dos_to": page_to or "",
-        "dos_from_iso": to_iso_date(page_from) if page_from else "",
-        "dos_to_iso": to_iso_date(page_to) if page_to else "",
+        "dos_from_iso": _first_iso(page_from),
+        "dos_to_iso": _last_iso(page_to) if page_to else "",
         "doc_dos_from": d_from or "",
         "doc_dos_to": d_to or "",
-        "doc_dos_from_iso": to_iso_date(d_from) if d_from else "",
-        "doc_dos_to_iso": to_iso_date(d_to) if d_to else "",
+        "doc_dos_from_iso": _first_iso(d_from),
+        "doc_dos_to_iso": _last_iso(d_to) if d_to else "",
         "match_type": match_type,
         "keyword": keyword,
+        "confidence": confidence,
     }
 
 
@@ -529,6 +672,7 @@ def detect_dos_per_page(
         page_to: Optional[str] = None
         match_type = ""
         keyword: Optional[str] = None
+        confidence: Optional[float] = None
 
         regex_hit = extract_dos_from_page_text(page_text)
         if regex_hit and regex_hit.get("dos_from") and regex_hit["dos_from"] != "unknown":
@@ -536,6 +680,7 @@ def detect_dos_per_page(
             page_to = regex_hit.get("dos_to") or page_from
             match_type = regex_hit.get("match_type", "regex")
             keyword = regex_hit.get("keyword")
+            confidence = float(regex_hit.get("confidence") or CONF_EDGE)
         elif use_llm and client is not None and page_allows_llm(page_text):
             pair = extract_dos_range_with_llm(
                 page_text,
@@ -547,6 +692,7 @@ def detect_dos_per_page(
             if pair:
                 page_from, page_to = pair
                 match_type = "llm"
+                confidence = CONF_FULL_PAGE
 
         # Document-level DOS
         if is_non_encounter_page(page_text) and not page_from:
@@ -554,25 +700,32 @@ def detect_dos_per_page(
             doc_to = DEFAULT_DOC_DOS
             if not match_type:
                 match_type = "non_encounter_default"
+            # Hardcoded 2/2/2022 → 80%
+            confidence = CONF_DEFAULT
         elif page_from:
-            # New encounter — update carry-forward
-            current_doc_from = page_from
-            current_doc_to = page_to or page_from
-            latest_ref = page_from
-            doc_from = current_doc_from
-            doc_to = current_doc_to
+            # New encounter — update carry-forward (use first date if multi-list)
+            current_doc_from = page_from.split(",")[0].strip()
+            current_doc_to = (page_to or page_from).split(",")[-1].strip()
+            latest_ref = current_doc_from
+            doc_from = page_from
+            doc_to = page_to or page_from
+            if confidence is None:
+                confidence = CONF_EDGE
         elif current_doc_from:
             # Inherit previous encounter
             doc_from = current_doc_from
             doc_to = current_doc_to or current_doc_from
             if not match_type:
                 match_type = "carry_forward"
+            if confidence is None:
+                confidence = CONF_EDGE
         else:
-            # Before first DOS
+            # Before first DOS — hardcoded default
             doc_from = DEFAULT_DOC_DOS
             doc_to = DEFAULT_DOC_DOS
             if not match_type:
                 match_type = "preamble_default"
+            confidence = CONF_DEFAULT
 
         rows.append(
             _hit(
@@ -584,6 +737,7 @@ def detect_dos_per_page(
                 keyword=keyword,
                 doc_dos_from=doc_from,
                 doc_dos_to=doc_to,
+                confidence=confidence,
             )
         )
 

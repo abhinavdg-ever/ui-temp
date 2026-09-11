@@ -8,6 +8,8 @@ import type {
 
 /** Doc Summary fallback when a page has no DOS and nothing to inherit. */
 const DEFAULT_DOS = "2/2/2022";
+/** Hardcoded default DOS confidence */
+const DEFAULT_DOS_CONFIDENCE = 0.8;
 
 function hasDos(value: string | null | undefined): value is string {
   return value != null && String(value).trim() !== "";
@@ -15,29 +17,50 @@ function hasDos(value: string | null | undefined): value is string {
 
 /**
  * Doc Summary only: missing DOS inherits the previous page's DOS;
- * if nothing precedes, use 2/2/2022.
+ * if nothing precedes, use 2/2/2022 at 80% confidence.
  */
 function fillDosForward(pages: ImagingPageResult[]): ImagingPageResult[] {
   let prevFrom: string | null = null;
   let prevTo: string | null = null;
+  let prevConf: number | null = null;
 
   return [...pages]
     .sort((a, b) => a.pageNumber - b.pageNumber)
     .map((page) => {
       let dosFrom = hasDos(page.dosFrom) ? page.dosFrom.trim() : null;
       let dosTo = hasDos(page.dosTo) ? page.dosTo.trim() : null;
+      let dosConfidence = page.dosConfidence ?? null;
+      let usedDefault = false;
 
       if (!dosFrom && !dosTo) {
-        dosFrom = prevFrom ?? DEFAULT_DOS;
-        dosTo = prevTo ?? DEFAULT_DOS;
+        if (prevFrom) {
+          dosFrom = prevFrom;
+          dosTo = prevTo ?? prevFrom;
+          dosConfidence = prevConf;
+        } else {
+          dosFrom = DEFAULT_DOS;
+          dosTo = DEFAULT_DOS;
+          dosConfidence = DEFAULT_DOS_CONFIDENCE;
+          usedDefault = true;
+        }
       } else {
         if (!dosFrom) dosFrom = dosTo ?? prevFrom ?? DEFAULT_DOS;
         if (!dosTo) dosTo = dosFrom ?? prevTo ?? DEFAULT_DOS;
+        if (
+          (dosFrom === DEFAULT_DOS || dosTo === DEFAULT_DOS) &&
+          dosConfidence == null
+        ) {
+          dosConfidence = DEFAULT_DOS_CONFIDENCE;
+          usedDefault = true;
+        }
       }
 
       prevFrom = dosFrom;
       prevTo = dosTo;
-      return { ...page, dosFrom, dosTo };
+      prevConf = usedDefault
+        ? DEFAULT_DOS_CONFIDENCE
+        : (dosConfidence ?? prevConf);
+      return { ...page, dosFrom, dosTo, dosConfidence };
     });
 }
 

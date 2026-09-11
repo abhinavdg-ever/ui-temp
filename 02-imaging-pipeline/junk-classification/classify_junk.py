@@ -47,10 +47,9 @@ from blank import is_likely_blank_image  # noqa: E402
 from classify import (  # noqa: E402
     CLASSIFICATION_LABELS,
     CODE_BLANK,
-    CODE_COVER,
     CODE_DUPLICATE,
-    CODE_INVOICE,
     CODE_MAIN,
+    JUNK_CODES,
     classification_confidence,
     classify_text,
     fingerprint,
@@ -257,7 +256,7 @@ def classify_folder(
             code, blank_via_image=bool(item["blank_via_image"] and code == CODE_BLANK)
         )
         # Duplicate is not junk — content may be valid; flag separately.
-        if code in (CODE_BLANK, CODE_INVOICE, CODE_COVER):
+        if code in JUNK_CODES:
             page_group = "junk"
         elif code == CODE_DUPLICATE:
             page_group = "duplicate"

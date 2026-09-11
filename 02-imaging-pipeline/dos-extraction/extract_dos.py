@@ -43,6 +43,7 @@ CSV_COLUMNS = [
     "doc_dos_to",
     "doc_dos_from_iso",
     "doc_dos_to_iso",
+    "confidence",
 ]
 
 
@@ -119,6 +120,13 @@ def hit_to_row(
     chart_name: str,
     hit: dict,
 ) -> dict[str, str]:
+    conf = hit.get("confidence")
+    conf_s = ""
+    if conf is not None and conf != "":
+        try:
+            conf_s = f"{float(conf):.2f}"
+        except (TypeError, ValueError):
+            conf_s = str(conf)
     return {
         "chart_name": chart_name,
         "page_name": str(hit.get("page_name") or ""),
@@ -131,6 +139,7 @@ def hit_to_row(
         "doc_dos_to": str(hit.get("doc_dos_to") or ""),
         "doc_dos_from_iso": str(hit.get("doc_dos_from_iso") or ""),
         "doc_dos_to_iso": str(hit.get("doc_dos_to_iso") or ""),
+        "confidence": conf_s,
     }
 
 

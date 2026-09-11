@@ -71,27 +71,49 @@ function downloadJsonFile(filename: string, data: unknown) {
   downloadTextFile(filename, JSON.stringify(data, null, 2), "application/json;charset=utf-8");
 }
 
-/** Document-level DOS for download: prefer docDos*, else carry-forward / 2/2/2022. */
+/** Document-level DOS for download: prefer docDos*, else carry-forward / 2/2/2022 @ 80%. */
 const DEFAULT_DOC_DOS = "2/2/2022";
+const DEFAULT_DOC_DOS_CONFIDENCE = 0.8;
 
 function fillDocDosForDownload(pages: ImagingPageResult[]): ImagingPageResult[] {
   let prevFrom: string | null = null;
   let prevTo: string | null = null;
+  let prevConf: number | null = null;
   return [...pages]
     .sort((a, b) => a.pageNumber - b.pageNumber)
     .map((page) => {
       let dosFrom = (page.docDosFrom || page.dosFrom || "").trim() || null;
       let dosTo = (page.docDosTo || page.dosTo || "").trim() || null;
+      let dosConfidence = page.dosConfidence ?? null;
       if (!dosFrom && !dosTo) {
-        dosFrom = prevFrom ?? DEFAULT_DOC_DOS;
-        dosTo = prevTo ?? DEFAULT_DOC_DOS;
+        if (prevFrom) {
+          dosFrom = prevFrom;
+          dosTo = prevTo ?? prevFrom;
+          dosConfidence = prevConf;
+        } else {
+          dosFrom = DEFAULT_DOC_DOS;
+          dosTo = DEFAULT_DOC_DOS;
+          dosConfidence = DEFAULT_DOC_DOS_CONFIDENCE;
+        }
       } else {
         if (!dosFrom) dosFrom = dosTo ?? prevFrom ?? DEFAULT_DOC_DOS;
         if (!dosTo) dosTo = dosFrom ?? prevTo ?? DEFAULT_DOC_DOS;
+        if (
+          (dosFrom === DEFAULT_DOC_DOS || dosTo === DEFAULT_DOC_DOS) &&
+          dosConfidence == null
+        ) {
+          dosConfidence = DEFAULT_DOC_DOS_CONFIDENCE;
+        }
       }
       prevFrom = dosFrom;
       prevTo = dosTo;
-      return { ...page, docDosFrom: dosFrom, docDosTo: dosTo };
+      prevConf = dosConfidence ?? prevConf;
+      return {
+        ...page,
+        docDosFrom: dosFrom,
+        docDosTo: dosTo,
+        dosConfidence,
+      };
     });
 }
 
@@ -322,6 +344,7 @@ export default function FolderViewer({
       pageTypeConfidence: p.pageTypeConfidence,
       dosFrom: p.docDosFrom ?? p.dosFrom,
       dosTo: p.docDosTo ?? p.dosTo,
+      dosConfidence: p.dosConfidence ?? null,
       member_verification_status: status,
     }));
     downloadJsonFile(`${folderName}_imaging.json`, pages);
@@ -348,6 +371,7 @@ export default function FolderViewer({
       "pageTypeConfidence",
       "dosFrom",
       "dosTo",
+      "dosConfidence",
       "member_verification_status",
     ];
     const esc = (v: unknown) => {
@@ -379,6 +403,7 @@ export default function FolderViewer({
         p.pageTypeConfidence,
         p.docDosFrom ?? p.dosFrom,
         p.docDosTo ?? p.dosTo,
+        p.dosConfidence ?? "",
         status,
       ]
         .map(esc)
