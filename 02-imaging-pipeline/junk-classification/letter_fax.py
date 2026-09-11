@@ -12,6 +12,9 @@ _PATTERNS = [
     re.compile(r"\bfacimile\b", re.IGNORECASE),  # common OCR typo
     re.compile(r"\bfax\s+sheet\b", re.IGNORECASE),
     re.compile(r"\bthis\s+fax\b", re.IGNORECASE),
+    # from document-processing / sequencing cover heuristics
+    re.compile(r"\bconfidentiality(\s+notice)?\b", re.IGNORECASE),
+    re.compile(r"\badvantmed\b", re.IGNORECASE),
 ]
 
 

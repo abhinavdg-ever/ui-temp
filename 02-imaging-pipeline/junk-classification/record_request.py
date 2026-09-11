@@ -26,6 +26,10 @@ RECORD_REQUEST_PHRASES = [
     "send record",
     "packet may contain",
     "audit fulfillment",
+    # from document-processing junk/cover.py
+    "intended recipient",
+    "transmission contains",
+    "confidential medical records",
 ]
 
 _PHRASE_PATTERNS = [

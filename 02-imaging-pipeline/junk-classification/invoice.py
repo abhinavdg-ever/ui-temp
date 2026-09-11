@@ -20,6 +20,9 @@ INVOICE_KEYWORDS = [
     "charge description",
     "balance due",
     "payments received",
+    "revenue reconciliation",
+    "revenue reconcilation",  # common misspelling
+    "revenue recon",
 ]
 
 _PATTERNS = [re.compile(rf"\b{re.escape(kw.lower())}\b") for kw in INVOICE_KEYWORDS]
