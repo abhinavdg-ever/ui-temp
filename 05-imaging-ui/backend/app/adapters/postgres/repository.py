@@ -295,6 +295,9 @@ class PostgresFolderRepository(FolderRepository):
                 verification=doc.verification,
                 verifications=doc.verifications,
                 pages=pages,
+                sectionsProcessed=doc.sectionsProcessed.model_copy(
+                    update={"dos": bool(dos_map) or doc.sectionsProcessed.dos}
+                ),
             )
         return ImagingDocumentResponse(
             folder_id=doc.folder_id,
@@ -302,4 +305,7 @@ class PostgresFolderRepository(FolderRepository):
             verification=doc.verification,
             verifications=doc.verifications,
             pages=pages,
+            sectionsProcessed=doc.sectionsProcessed.model_copy(
+                update={"dos": bool(dos_map) or doc.sectionsProcessed.dos}
+            ),
         )

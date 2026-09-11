@@ -119,12 +119,26 @@ class ImagingVerificationDetails(BaseModel):
     decisionReason: str | None = None
 
 
+class ImagingSectionsProcessed(BaseModel):
+    """True when pipeline CSV data exists for this chart (section was run)."""
+
+    member: bool = False
+    dos: bool = False
+    hw: bool = False
+    rotation: bool = False
+    junk: bool = False
+    verification: bool = False
+
+
 class ImagingDocumentResponse(BaseModel):
     folder_id: str
     manifest: ImagingManifestDetails = Field(default_factory=ImagingManifestDetails)
     verification: ImagingVerificationDetails | None = None
     verifications: list[ImagingVerificationDetails] = Field(default_factory=list)
     pages: list[ImagingPageResult] = Field(default_factory=list)
+    sectionsProcessed: ImagingSectionsProcessed = Field(
+        default_factory=ImagingSectionsProcessed
+    )
 
 
 class HealthResponse(BaseModel):

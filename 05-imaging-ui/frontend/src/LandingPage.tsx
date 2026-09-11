@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -17,14 +17,70 @@ import {
 } from "./api";
 
 const PAGE_SIZE = 15;
+const LANDING_FILTERS_KEY = "advantmed_imaging_landing_filters";
+
+type SortKey = "filename" | "pages" | "updated";
+type SortDir = "asc" | "desc";
+
+type LandingFilters = {
+  query: string;
+  statusFilter: "ALL" | OcrRunStatus;
+  sortKey: SortKey;
+  sortDir: SortDir;
+  page: number;
+};
+
+const STATUS_VALUES = new Set<string>([
+  "ALL",
+  "QUEUED",
+  "IN_PROGRESS",
+  "COMPLETED",
+  "IMAGING_IN_PROGRESS",
+  "IMAGING_COMPLETED",
+  "FAILED",
+]);
+
+function readLandingFilters(): LandingFilters {
+  const defaults: LandingFilters = {
+    query: "",
+    statusFilter: "ALL",
+    sortKey: "filename",
+    sortDir: "asc",
+    page: 1,
+  };
+  try {
+    const raw = sessionStorage.getItem(LANDING_FILTERS_KEY);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw) as Partial<LandingFilters>;
+    const statusFilter =
+      typeof parsed.statusFilter === "string" && STATUS_VALUES.has(parsed.statusFilter)
+        ? (parsed.statusFilter as LandingFilters["statusFilter"])
+        : defaults.statusFilter;
+    const sortKey =
+      parsed.sortKey === "filename" || parsed.sortKey === "pages" || parsed.sortKey === "updated"
+        ? parsed.sortKey
+        : defaults.sortKey;
+    const sortDir = parsed.sortDir === "desc" ? "desc" : "asc";
+    const page =
+      typeof parsed.page === "number" && parsed.page >= 1
+        ? Math.floor(parsed.page)
+        : 1;
+    return {
+      query: typeof parsed.query === "string" ? parsed.query : "",
+      statusFilter,
+      sortKey,
+      sortDir,
+      page,
+    };
+  } catch {
+    return defaults;
+  }
+}
 
 type Props = {
   onView: (folderId: string, mode?: "ocr" | "imaging") => void;
   onOpenFileViewer?: () => void;
 };
-
-type SortKey = "filename" | "pages" | "updated";
-type SortDir = "asc" | "desc";
 
 function fmtUpdated(iso: string | null): string {
   if (!iso) return "—";
@@ -73,14 +129,18 @@ function compareFolders(a: FolderSummary, b: FolderSummary, key: SortKey, dir: S
 }
 
 export default function LandingPage({ onView, onOpenFileViewer }: Props) {
+  const saved = useMemo(() => readLandingFilters(), []);
   const [folders, setFolders] = useState<FolderSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [page, setPage] = useState(1);
-  const [query, setQuery] = useState("");
-  const [sortKey, setSortKey] = useState<SortKey>("filename");
-  const [sortDir, setSortDir] = useState<SortDir>("asc");
-  const [statusFilter, setStatusFilter] = useState<"ALL" | OcrRunStatus>("ALL");
+  const [page, setPage] = useState(saved.page);
+  const [query, setQuery] = useState(saved.query);
+  const [sortKey, setSortKey] = useState<SortKey>(saved.sortKey);
+  const [sortDir, setSortDir] = useState<SortDir>(saved.sortDir);
+  const [statusFilter, setStatusFilter] = useState<"ALL" | OcrRunStatus>(
+    saved.statusFilter,
+  );
+  const skipFilterPageReset = useRef(true);
 
   async function load() {
     setLoading(true);
@@ -88,7 +148,6 @@ export default function LandingPage({ onView, onOpenFileViewer }: Props) {
     try {
       const data = await listFolders();
       setFolders(data);
-      setPage(1);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load history");
     } finally {
@@ -99,6 +158,21 @@ export default function LandingPage({ onView, onOpenFileViewer }: Props) {
   useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    try {
+      const payload: LandingFilters = {
+        query,
+        statusFilter,
+        sortKey,
+        sortDir,
+        page,
+      };
+      sessionStorage.setItem(LANDING_FILTERS_KEY, JSON.stringify(payload));
+    } catch {
+      /* ignore */
+    }
+  }, [query, statusFilter, sortKey, sortDir, page]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -121,6 +195,10 @@ export default function LandingPage({ onView, onOpenFileViewer }: Props) {
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
 
   useEffect(() => {
+    if (skipFilterPageReset.current) {
+      skipFilterPageReset.current = false;
+      return;
+    }
     setPage(1);
   }, [query, sortKey, sortDir, statusFilter]);
 

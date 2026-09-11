@@ -16,6 +16,7 @@ from app.core.schemas import (
     ImagingDocumentResponse,
     ImagingManifestDetails,
     ImagingPageResult,
+    ImagingSectionsProcessed,
     OcrKind,
     OcrRunStatus,
     OcrTextResponse,
@@ -988,91 +989,71 @@ class LocalFolderRepository(FolderRepository):
             imaging_pages = empty_imaging_pages(pages)
             manifest = self._manifest_for_folder(folder_id)
 
-        imaging_pages = overlay_fields(
-            imaging_pages,
-            index_dos_rows(
-                collect_rows(
-                    folder_dir=folder_dir,
-                    data_root=self.data_root,
-                    per_chart_name=f"{chart}_dos.csv",
-                    combined_rel=(
-                        "02-imaging-pipeline",
-                        "dos-extraction",
-                        "output",
-                        "dos_extraction.csv",
-                    ),
-                    chart_name=chart,
-                ),
-                chart,
+        dos_rows = collect_rows(
+            folder_dir=folder_dir,
+            data_root=self.data_root,
+            per_chart_name=f"{chart}_dos.csv",
+            combined_rel=(
+                "02-imaging-pipeline",
+                "dos-extraction",
+                "output",
+                "dos_extraction.csv",
             ),
+            chart_name=chart,
+        )
+        hw_rows = collect_rows(
+            folder_dir=folder_dir,
+            data_root=self.data_root,
+            per_chart_name=f"{chart}_hw_printed.csv",
+            combined_rel=("01-ocr-extraction", "output", "hw_printed.csv"),
+            chart_name=chart,
+        )
+        rotation_rows = collect_rows(
+            folder_dir=folder_dir,
+            data_root=self.data_root,
+            per_chart_name=f"{chart}_rotation.csv",
+            combined_rel=(
+                "02-imaging-pipeline",
+                "rotation-orientation",
+                "output",
+                "rotation.csv",
+            ),
+            chart_name=chart,
+        )
+        member_rows = collect_rows(
+            folder_dir=folder_dir,
+            data_root=self.data_root,
+            per_chart_name=f"{chart}_member_extraction.csv",
+            combined_rel=(
+                "02-imaging-pipeline",
+                "member-verification",
+                "output",
+                "member_extraction_results.csv",
+            ),
+            chart_name=chart,
+        )
+        junk_rows = collect_rows(
+            folder_dir=folder_dir,
+            data_root=self.data_root,
+            per_chart_name=f"{chart}_junk.csv",
+            combined_rel=(
+                "02-imaging-pipeline",
+                "junk-classification",
+                "output",
+                "junk_classification.csv",
+            ),
+            chart_name=chart,
+        )
+
+        imaging_pages = overlay_fields(imaging_pages, index_dos_rows(dos_rows, chart))
+        imaging_pages = overlay_fields(imaging_pages, index_hw_rows(hw_rows, chart))
+        imaging_pages = overlay_fields(
+            imaging_pages, index_rotation_rows(rotation_rows, chart)
         )
         imaging_pages = overlay_fields(
-            imaging_pages,
-            index_hw_rows(
-                collect_rows(
-                    folder_dir=folder_dir,
-                    data_root=self.data_root,
-                    per_chart_name=f"{chart}_hw_printed.csv",
-                    combined_rel=("01-ocr-extraction", "output", "hw_printed.csv"),
-                    chart_name=chart,
-                ),
-                chart,
-            ),
+            imaging_pages, index_member_extraction_rows(member_rows, chart)
         )
-        imaging_pages = overlay_fields(
-            imaging_pages,
-            index_rotation_rows(
-                collect_rows(
-                    folder_dir=folder_dir,
-                    data_root=self.data_root,
-                    per_chart_name=f"{chart}_rotation.csv",
-                    combined_rel=(
-                        "02-imaging-pipeline",
-                        "rotation-orientation",
-                        "output",
-                        "rotation.csv",
-                    ),
-                    chart_name=chart,
-                ),
-                chart,
-            ),
-        )
-        imaging_pages = overlay_fields(
-            imaging_pages,
-            index_member_extraction_rows(
-                collect_rows(
-                    folder_dir=folder_dir,
-                    data_root=self.data_root,
-                    per_chart_name=f"{chart}_member_extraction.csv",
-                    combined_rel=(
-                        "02-imaging-pipeline",
-                        "member-verification",
-                        "output",
-                        "member_extraction_results.csv",
-                    ),
-                    chart_name=chart,
-                ),
-                chart,
-            ),
-        )
-        imaging_pages = overlay_fields(
-            imaging_pages,
-            index_junk_rows(
-                collect_rows(
-                    folder_dir=folder_dir,
-                    data_root=self.data_root,
-                    per_chart_name=f"{chart}_junk.csv",
-                    combined_rel=(
-                        "02-imaging-pipeline",
-                        "junk-classification",
-                        "output",
-                        "junk_classification.csv",
-                    ),
-                    chart_name=chart,
-                ),
-                chart,
-            ),
-        )
+        imaging_pages = overlay_fields(imaging_pages, index_junk_rows(junk_rows, chart))
 
         ver_rows = collect_rows(
             folder_dir=folder_dir,
@@ -1086,7 +1067,6 @@ class LocalFolderRepository(FolderRepository):
             ),
             chart_name=chart,
         )
-        # also allow dropping the excel export at pack root output
         if not ver_rows:
             alt = (
                 monorepo_root_from_data(self.data_root)
@@ -1106,10 +1086,20 @@ class LocalFolderRepository(FolderRepository):
         verification = load_verification(ver_rows, chart)
         verifications = load_verifications(ver_rows, chart)
 
+        sections = ImagingSectionsProcessed(
+            member=bool(member_rows),
+            dos=bool(dos_rows),
+            hw=bool(hw_rows),
+            rotation=bool(rotation_rows),
+            junk=bool(junk_rows),
+            verification=bool(ver_rows),
+        )
+
         return ImagingDocumentResponse(
             folder_id=folder_id,
             manifest=manifest,
             verification=verification,
             verifications=verifications,
             pages=imaging_pages,
+            sectionsProcessed=sections,
         )

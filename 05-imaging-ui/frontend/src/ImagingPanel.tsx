@@ -3,8 +3,18 @@ import type {
   ImagingDocumentResponse,
   ImagingManifestDetails,
   ImagingPageResult,
+  ImagingSectionsProcessed,
   ImagingVerificationDetails,
 } from "./api";
+
+const DEFAULT_SECTIONS: ImagingSectionsProcessed = {
+  member: false,
+  dos: false,
+  hw: false,
+  rotation: false,
+  junk: false,
+  verification: false,
+};
 
 /** Doc Summary fallback when a page has no DOS and nothing to inherit. */
 const DEFAULT_DOS = "2/2/2022";
@@ -18,8 +28,14 @@ function hasDos(value: string | null | undefined): value is string {
 /**
  * Doc Summary only: missing DOS inherits the previous page's DOS;
  * if nothing precedes, use 2/2/2022 at 80% confidence.
+ * Skipped when DOS section was never run for this folder.
  */
-function fillDosForward(pages: ImagingPageResult[]): ImagingPageResult[] {
+function fillDosForward(
+  pages: ImagingPageResult[],
+  dosProcessed: boolean,
+): ImagingPageResult[] {
+  if (!dosProcessed) return pages;
+
   let prevFrom: string | null = null;
   let prevTo: string | null = null;
   let prevConf: number | null = null;
@@ -76,8 +92,15 @@ type Props = {
   currentFileName: string | null;
 };
 
-function fmt(value: string | number | boolean | null | undefined): string {
-  if (value === null || value === undefined || value === "") return "Not Found";
+const YET_TO_PROCESS = "Yet to Process";
+const NOT_FOUND = "Not Found";
+
+function fmt(
+  value: string | number | boolean | null | undefined,
+  processed = true,
+): string {
+  if (!processed) return YET_TO_PROCESS;
+  if (value === null || value === undefined || value === "") return NOT_FOUND;
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (typeof value === "number") {
     return Number.isInteger(value) ? String(value) : value.toFixed(2);
@@ -85,40 +108,58 @@ function fmt(value: string | number | boolean | null | undefined): string {
   return String(value);
 }
 
-function fmtDegrees(value: number | null | undefined): string {
-  if (value === null || value === undefined) return "Not Found";
+function fmtDegrees(value: number | null | undefined, processed = true): string {
+  if (!processed) return YET_TO_PROCESS;
+  if (value === null || value === undefined) return NOT_FOUND;
   const n = Number.isInteger(value) ? String(value) : value.toFixed(2);
   return `${n}°`;
 }
 
-function fmtConfidence(value: number | null | undefined): string {
+function fmtConfidence(
+  value: number | null | undefined,
+  processed = true,
+): string {
+  if (!processed) return YET_TO_PROCESS;
   if (value === null || value === undefined) return "NA";
   const pct = value <= 1 ? value * 100 : value;
   return `${pct.toFixed(1)}%`;
 }
 
-function fmtBlankOrJunk(value: string | boolean | null | undefined): string {
-  if (value === null || value === undefined || value === "") return "NA";
+function fmtBlankOrJunk(
+  value: string | boolean | null | undefined,
+  processed = true,
+): string {
+  if (!processed) return YET_TO_PROCESS;
+  if (value === null || value === undefined || value === "") return NOT_FOUND;
   if (typeof value === "boolean") return value ? "Yes (Junk)" : "No";
   return String(value);
 }
 
-function fmtYesNoNA(value: boolean | null | undefined): string {
-  if (value === null || value === undefined) return "NA";
+function fmtYesNo(
+  value: boolean | null | undefined,
+  processed = true,
+): string {
+  if (!processed) return YET_TO_PROCESS;
+  if (value === null || value === undefined) return NOT_FOUND;
   return value ? "Yes" : "No";
 }
 
-function fmtPageType(value: string | null | undefined): string {
-  if (value === null || value === undefined || value === "") return "Not Available";
+function fmtPageType(value: string | null | undefined, processed = true): string {
+  if (!processed) return YET_TO_PROCESS;
+  if (value === null || value === undefined || value === "") return NOT_FOUND;
   return String(value);
 }
 
-function fmtPagesMatched(v: ImagingVerificationDetails): string {
+function fmtPagesMatched(
+  v: ImagingVerificationDetails,
+  processed = true,
+): string {
+  if (!processed) return YET_TO_PROCESS;
   if (v.pagesMatched != null && v.pagesChecked != null) {
     return `${v.pagesMatched}/${v.pagesChecked}`;
   }
   if (v.pagesMatched != null) return String(v.pagesMatched);
-  return "Not Found";
+  return NOT_FOUND;
 }
 
 function DetailSection({
@@ -175,9 +216,14 @@ function ManifestDetails({ manifest }: { manifest: ImagingManifestDetails }) {
   );
 }
 
-function PageDetails({ page }: { page: ImagingPageResult }) {
-  const memberConf = fmtConfidence(page.memberConfidence);
-  const qualityConf = fmtConfidence(page.pageQualityConfidence);
+function PageDetails({
+  page,
+  sections,
+}: {
+  page: ImagingPageResult;
+  sections: ImagingSectionsProcessed;
+}) {
+  const memberConf = fmtConfidence(page.memberConfidence, sections.member);
 
   return (
     <div className="imaging-page-details">
@@ -194,17 +240,17 @@ function PageDetails({ page }: { page: ImagingPageResult }) {
           <tbody>
             <tr>
               <th scope="row">Extracted Name</th>
-              <td>{fmt(page.memberName)}</td>
+              <td>{fmt(page.memberName, sections.member)}</td>
               <td>{memberConf}</td>
             </tr>
             <tr>
               <th scope="row">Extracted DOB</th>
-              <td>{fmt(page.memberDob)}</td>
+              <td>{fmt(page.memberDob, sections.member)}</td>
               <td>{memberConf}</td>
             </tr>
             <tr>
               <th scope="row">Member ID</th>
-              <td>{fmt(page.memberId)}</td>
+              <td>{fmt(page.memberId, sections.member)}</td>
               <td>{memberConf}</td>
             </tr>
           </tbody>
@@ -216,25 +262,26 @@ function PageDetails({ page }: { page: ImagingPageResult }) {
         rows={[
           {
             label: "Printed / Handwritten",
-            value: fmt(page.handwrittenOrPrinted),
+            value: fmt(page.handwrittenOrPrinted, sections.hw),
             confidence: fmtConfidence(
               page.handwrittenOrPrintedConfidence ?? page.pageQualityConfidence,
+              sections.hw,
             ),
           },
           {
             label: "Orientation Angle (Page)",
-            value: fmtDegrees(page.orientationAngle),
-            confidence: qualityConf,
+            value: fmtDegrees(page.orientationAngle, sections.rotation),
+            confidence: fmtConfidence(page.pageQualityConfidence, sections.rotation),
           },
           {
             label: "Tilt Angle (Text)",
-            value: fmtDegrees(page.tiltAngle),
-            confidence: qualityConf,
+            value: fmtDegrees(page.tiltAngle, sections.rotation),
+            confidence: fmtConfidence(page.pageQualityConfidence, sections.rotation),
           },
           {
             label: "Mirrored (Text)",
-            value: fmt(page.mirrored),
-            confidence: qualityConf,
+            value: fmt(page.mirrored, sections.rotation),
+            confidence: fmtConfidence(page.pageQualityConfidence, sections.rotation),
           },
         ]}
       />
@@ -244,13 +291,13 @@ function PageDetails({ page }: { page: ImagingPageResult }) {
         rows={[
           {
             label: "DOS From",
-            value: fmt(page.dosFrom),
-            confidence: fmtConfidence(page.dosConfidence),
+            value: fmt(page.dosFrom, sections.dos),
+            confidence: fmtConfidence(page.dosConfidence, sections.dos),
           },
           {
             label: "DOS To",
-            value: fmt(page.dosTo),
-            confidence: fmtConfidence(page.dosConfidence),
+            value: fmt(page.dosTo, sections.dos),
+            confidence: fmtConfidence(page.dosConfidence, sections.dos),
           },
         ]}
       />
@@ -260,18 +307,18 @@ function PageDetails({ page }: { page: ImagingPageResult }) {
         rows={[
           {
             label: "Blank or Junk",
-            value: fmtBlankOrJunk(page.blankOrJunk),
-            confidence: fmtConfidence(page.pageTypeConfidence),
+            value: fmtBlankOrJunk(page.blankOrJunk, sections.junk),
+            confidence: fmtConfidence(page.pageTypeConfidence, sections.junk),
           },
           {
             label: "Is Duplicate",
-            value: fmtYesNoNA(page.isDuplicate),
-            confidence: fmtConfidence(page.pageTypeConfidence),
+            value: fmtYesNo(page.isDuplicate, sections.junk),
+            confidence: fmtConfidence(page.pageTypeConfidence, sections.junk),
           },
           {
             label: "Page Type",
-            value: fmtPageType(page.pageType),
-            confidence: fmtConfidence(page.pageTypeConfidence),
+            value: fmtPageType(page.pageType, sections.junk),
+            confidence: fmtConfidence(page.pageTypeConfidence, sections.junk),
           },
         ]}
       />
@@ -281,12 +328,18 @@ function PageDetails({ page }: { page: ImagingPageResult }) {
 
 function RejectionRulesTable({
   rows,
+  verificationProcessed,
 }: {
   rows: ImagingVerificationDetails[];
+  verificationProcessed: boolean;
 }) {
   if (rows.length === 0) {
     return (
-      <div className="ocr-empty">No member verification summary for this chart.</div>
+      <div className="ocr-empty">
+        {verificationProcessed
+          ? "No member verification summary for this chart."
+          : YET_TO_PROCESS}
+      </div>
     );
   }
 
@@ -306,11 +359,13 @@ function RejectionRulesTable({
         {rows.map((v, idx) => (
           <tr key={`${v.finalStatus ?? "row"}-${idx}`}>
             <td>Member Verification</td>
-            <td>{fmt(v.finalStatus)}</td>
-            <td>{fmt(v.matchedName)}</td>
-            <td>{fmtPagesMatched(v)}</td>
-            <td>{fmtConfidence(v.matchedConfidence)}</td>
-            <td className="imaging-decision-reason">{fmt(v.decisionReason)}</td>
+            <td>{fmt(v.finalStatus, verificationProcessed)}</td>
+            <td>{fmt(v.matchedName, verificationProcessed)}</td>
+            <td>{fmtPagesMatched(v, verificationProcessed)}</td>
+            <td>{fmtConfidence(v.matchedConfidence, verificationProcessed)}</td>
+            <td className="imaging-decision-reason">
+              {fmt(v.decisionReason, verificationProcessed)}
+            </td>
           </tr>
         ))}
       </tbody>
@@ -321,12 +376,17 @@ function RejectionRulesTable({
 function DocSummary({
   pages,
   verifications,
+  sections,
 }: {
   pages: ImagingPageResult[];
   verifications: ImagingVerificationDetails[];
+  sections: ImagingSectionsProcessed;
 }) {
   const [view, setView] = useState<DocView>("values");
-  const rows = useMemo(() => fillDosForward(pages), [pages]);
+  const rows = useMemo(
+    () => fillDosForward(pages, sections.dos),
+    [pages, sections.dos],
+  );
   const showConfidence = view === "confidence";
 
   return (
@@ -362,7 +422,10 @@ function DocSummary({
       </div>
 
       {view === "rejection" ? (
-        <RejectionRulesTable rows={verifications} />
+        <RejectionRulesTable
+          rows={verifications}
+          verificationProcessed={sections.verification}
+        />
       ) : (
         <table className="imaging-summary-table">
           <thead>
@@ -396,24 +459,29 @@ function DocSummary({
               <tr key={`${p.pageNumber}-${p.fileName}`}>
                 <td>{p.pageNumber}</td>
                 <td className="imaging-mono">{p.fileName}</td>
-                <td>{fmt(p.memberName)}</td>
-                <td>{fmt(p.memberDob)}</td>
-                <td>{fmt(p.memberId)}</td>
-                <td>{fmt(p.handwrittenOrPrinted)}</td>
-                <td>{fmtDegrees(p.orientationAngle)}</td>
-                <td>{fmtDegrees(p.tiltAngle)}</td>
-                <td>{fmt(p.mirrored)}</td>
-                <td>{fmt(p.dosFrom)}</td>
-                <td>{fmt(p.dosTo)}</td>
-                <td>{fmtBlankOrJunk(p.blankOrJunk)}</td>
-                <td>{fmtYesNoNA(p.isDuplicate)}</td>
-                <td>{fmtPageType(p.pageType)}</td>
+                <td>{fmt(p.memberName, sections.member)}</td>
+                <td>{fmt(p.memberDob, sections.member)}</td>
+                <td>{fmt(p.memberId, sections.member)}</td>
+                <td>{fmt(p.handwrittenOrPrinted, sections.hw)}</td>
+                <td>{fmtDegrees(p.orientationAngle, sections.rotation)}</td>
+                <td>{fmtDegrees(p.tiltAngle, sections.rotation)}</td>
+                <td>{fmt(p.mirrored, sections.rotation)}</td>
+                <td>{fmt(p.dosFrom, sections.dos)}</td>
+                <td>{fmt(p.dosTo, sections.dos)}</td>
+                <td>{fmtBlankOrJunk(p.blankOrJunk, sections.junk)}</td>
+                <td>{fmtYesNo(p.isDuplicate, sections.junk)}</td>
+                <td>{fmtPageType(p.pageType, sections.junk)}</td>
                 {showConfidence ? (
                   <>
-                    <td>{fmtConfidence(p.memberConfidence)}</td>
-                    <td>{fmtConfidence(p.pageQualityConfidence)}</td>
-                    <td>{fmtConfidence(p.dosConfidence)}</td>
-                    <td>{fmtConfidence(p.pageTypeConfidence)}</td>
+                    <td>{fmtConfidence(p.memberConfidence, sections.member)}</td>
+                    <td>
+                      {fmtConfidence(
+                        p.pageQualityConfidence,
+                        sections.hw || sections.rotation,
+                      )}
+                    </td>
+                    <td>{fmtConfidence(p.dosConfidence, sections.dos)}</td>
+                    <td>{fmtConfidence(p.pageTypeConfidence, sections.junk)}</td>
                   </>
                 ) : null}
               </tr>
@@ -448,6 +516,7 @@ export default function ImagingPanel({
     dob: null,
     memberId: null,
   };
+  const sections = document.sectionsProcessed ?? DEFAULT_SECTIONS;
   const verifications =
     document.verifications && document.verifications.length > 0
       ? document.verifications
@@ -459,7 +528,11 @@ export default function ImagingPanel({
     return (
       <div className="imaging-panel-stack">
         <ManifestDetails manifest={manifest} />
-        <DocSummary pages={document.pages} verifications={verifications} />
+        <DocSummary
+          pages={document.pages}
+          verifications={verifications}
+          sections={sections}
+        />
       </div>
     );
   }
@@ -480,7 +553,7 @@ export default function ImagingPanel({
   return (
     <div className="imaging-panel-stack">
       <ManifestDetails manifest={manifest} />
-      <PageDetails page={currentPage} />
+      <PageDetails page={currentPage} sections={sections} />
     </div>
   );
 }

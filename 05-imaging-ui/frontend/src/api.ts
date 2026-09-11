@@ -84,12 +84,22 @@ export type ImagingVerificationDetails = {
   decisionReason: string | null;
 };
 
+export type ImagingSectionsProcessed = {
+  member: boolean;
+  dos: boolean;
+  hw: boolean;
+  rotation: boolean;
+  junk: boolean;
+  verification: boolean;
+};
+
 export type ImagingDocumentResponse = {
   folder_id: string;
   manifest: ImagingManifestDetails;
   verification?: ImagingVerificationDetails | null;
   verifications?: ImagingVerificationDetails[];
   pages: ImagingPageResult[];
+  sectionsProcessed?: ImagingSectionsProcessed;
 };
 
 export type BlobAuthMode = "entra" | "sas";
