@@ -1804,6 +1804,15 @@ input {
   gap: 1rem;
 }
 
+.landing-intro-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
 .landing-file-viewer-btn {
   display: inline-flex;
   align-items: center;
@@ -1819,9 +1828,14 @@ input {
   cursor: pointer;
 }
 
-.landing-file-viewer-btn:hover {
+.landing-file-viewer-btn:hover:not(:disabled) {
   background: var(--brand-100);
   border-color: var(--brand-400);
+}
+
+.landing-file-viewer-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 /* ---------- Page zoom / fullscreen ---------- */

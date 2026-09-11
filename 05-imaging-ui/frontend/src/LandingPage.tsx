@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
+  Download,
   FileText,
   FolderOpen,
   Inbox,
@@ -10,6 +11,7 @@ import {
   Search,
 } from "lucide-react";
 import {
+  imagingExportCsvUrl,
   listFolders,
   OCR_STATUS_LABELS,
   type FolderSummary,
@@ -241,6 +243,20 @@ export default function LandingPage({ onView, onOpenFileViewer }: Props) {
     return sortDir === "asc" ? " ↑" : " ↓";
   }
 
+  function downloadImagingCsv() {
+    const url = imagingExportCsvUrl({
+      status: statusFilter,
+      q: query,
+    });
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "imaging_export.csv";
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
   return (
     <div className="landing">
       <div className="landing-home">
@@ -249,12 +265,32 @@ export default function LandingPage({ onView, onOpenFileViewer }: Props) {
             <h1>History</h1>
             <p>Browse processed folders, and view OCR and Imaging Pipeline Results.</p>
           </div>
-          {onOpenFileViewer ? (
-            <button type="button" className="landing-file-viewer-btn" onClick={onOpenFileViewer}>
-              <FolderOpen size={15} aria-hidden="true" />
-              File Viewer
+          <div className="landing-intro-actions">
+            <button
+              type="button"
+              className="landing-file-viewer-btn"
+              onClick={downloadImagingCsv}
+              disabled={folders.length === 0 || loading}
+              title={
+                statusFilter !== "ALL" || query.trim()
+                  ? "Download imaging CSV for folders matching current search/status"
+                  : "Download all imaging pipeline outputs as CSV"
+              }
+            >
+              <Download size={15} aria-hidden="true" />
+              Download Imaging CSV
             </button>
-          ) : null}
+            {onOpenFileViewer ? (
+              <button
+                type="button"
+                className="landing-file-viewer-btn"
+                onClick={onOpenFileViewer}
+              >
+                <FolderOpen size={15} aria-hidden="true" />
+                File Viewer
+              </button>
+            ) : null}
+          </div>
         </div>
 
         {folders.length > 0 && (

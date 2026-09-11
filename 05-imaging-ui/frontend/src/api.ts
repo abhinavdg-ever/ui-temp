@@ -161,6 +161,21 @@ export function getFolderImaging(folderId: string): Promise<ImagingDocumentRespo
   return api(`/api/folders/${encodeURIComponent(folderId)}/imaging`);
 }
 
+/** URL for History “Download Imaging CSV” (optional status / search filters). */
+export function imagingExportCsvUrl(opts?: {
+  status?: OcrRunStatus | "ALL";
+  q?: string;
+}): string {
+  const params = new URLSearchParams();
+  if (opts?.status && opts.status !== "ALL") {
+    params.set("status", opts.status);
+  }
+  const q = opts?.q?.trim();
+  if (q) params.set("q", q);
+  const qs = params.toString();
+  return qs ? `/api/imaging/export.csv?${qs}` : "/api/imaging/export.csv";
+}
+
 export function pageImageUrl(folderId: string, pageNumber: number): string {
   return `/api/folders/${encodeURIComponent(folderId)}/pages/${pageNumber}/image`;
 }

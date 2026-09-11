@@ -1,7 +1,7 @@
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse, RedirectResponse, Response
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
 
 from app.adapters.base import FolderRepository
 from app.adapters.factory import get_repository
@@ -15,6 +15,7 @@ from app.core.schemas import (
     OcrTextResponse,
 )
 from app.services.blob_store import download_blob_bytes
+from app.services.imaging_csv import filter_folder, iter_csv_lines
 
 router = APIRouter()
 
@@ -157,6 +158,46 @@ def get_folder_imaging(
 ) -> ImagingDocumentResponse:
     """Imaging page/document results (dummy/local JSON until Postgres schema lands)."""
     return repo.get_imaging(folder_id)
+
+
+@router.get("/imaging/export.csv")
+def export_imaging_csv(
+    status: str | None = Query(
+        default=None,
+        description="Optional ocr_status filter (e.g. IMAGING_COMPLETED). Omit or ALL = no filter.",
+    ),
+    q: str | None = Query(
+        default=None,
+        description="Optional folder name substring filter (case-insensitive).",
+    ),
+    repo: FolderRepository = Depends(get_repository),
+) -> StreamingResponse:
+    """Download all imaging pipeline outputs as one CSV (one row per page)."""
+
+    def docs():
+        for folder in repo.list_folders():
+            if not filter_folder(
+                name=folder.name,
+                ocr_status=folder.ocr_status,
+                status=status,
+                q=q,
+            ):
+                continue
+            try:
+                doc = repo.get_imaging(folder.id)
+            except HTTPException:
+                continue
+            yield folder.name, doc
+
+    filename = "imaging_export.csv"
+    return StreamingResponse(
+        iter_csv_lines(docs()),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 def _media_type(suffix: str) -> str:
