@@ -19,7 +19,10 @@ class Settings(BaseSettings):
     # Local mode: stacked metadata_R{n}_B{n}.csv for Manifest Details
     # Monorepo: ../06-postgres-db/manifest  |  Nested: ./postgres-db/manifest
     metadata_root: str = "../06-postgres-db/manifest"
-    # Pipeline CSV packs (01-ocr-extraction, 02-imaging-pipeline). Empty → derive from data_root.
+    # Pipeline CSV drop folder (Docker: /data/pipeline). Copy pack outputs here.
+    # Accepts flat files (dos_extraction.csv) or mirrored pack paths.
+    pipeline_root: str = "./data/pipeline"
+    # Optional override for full monorepo root (01-ocr-extraction / 02-imaging-pipeline).
     monorepo_root: str = ""
     database_url: str = "postgresql+psycopg://aiuser:passwordpoc2026@172.20.4.170:5432/imaging_outputs"
     # POC tables are in public (database name is imaging_outputs)
@@ -54,8 +57,20 @@ class Settings(BaseSettings):
         return path
 
     @property
+    def resolved_pipeline_root(self) -> Path:
+        """Drop folder for pipeline CSVs (local ./data/pipeline or Docker /data/pipeline)."""
+        raw = (self.pipeline_root or "").strip() or "./data/pipeline"
+        path = Path(raw)
+        if not path.is_absolute():
+            path = (ROOT_DIR / path).resolve()
+        # Docker conventional mount
+        if not path.is_dir() and Path("/data/pipeline").is_dir():
+            return Path("/data/pipeline").resolve()
+        return path
+
+    @property
     def resolved_monorepo_root(self) -> Path:
-        """Root that contains 01-ocr-extraction / 02-imaging-pipeline / 06-postgres-db."""
+        """Root that contains 01-ocr-extraction / 02-imaging-pipeline (or pipeline drop)."""
         raw = (self.monorepo_root or "").strip()
         if raw:
             path = Path(raw)
@@ -63,15 +78,26 @@ class Settings(BaseSettings):
                 path = (ROOT_DIR / path).resolve()
             if path.is_dir():
                 return path
+
+        pipeline = self.resolved_pipeline_root
+        if pipeline.is_dir() and (
+            (pipeline / "02-imaging-pipeline").is_dir()
+            or (pipeline / "01-ocr-extraction").is_dir()
+            or any(pipeline.glob("*.csv"))
+        ):
+            return pipeline
+
         # data/folders → 05-imaging-ui → monorepo
         derived = self.resolved_data_root.parent.parent.parent
         if (derived / "02-imaging-pipeline").is_dir() or (derived / "01-ocr-extraction").is_dir():
             return derived
-        # Docker fallback when only /data/folders is mounted without monorepo layout
-        for cand in (Path("/data/monorepo"), ROOT_DIR.parent):
+
+        for cand in (Path("/data/monorepo"), Path("/data/pipeline"), ROOT_DIR.parent):
             if (cand / "02-imaging-pipeline").is_dir() or (cand / "01-ocr-extraction").is_dir():
                 return cand.resolve()
-        return derived
+            if cand.is_dir() and any(cand.glob("*.csv")):
+                return cand.resolve()
+        return pipeline if pipeline.is_dir() else derived
 
     @property
     def resolved_metadata_root(self) -> Path:

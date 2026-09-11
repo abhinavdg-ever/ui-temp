@@ -145,35 +145,9 @@ def _overlay_dos_on_pages(
 def _index_hw_rows(
     rows: list[dict[str, str]], chart_name: str
 ) -> dict[str, dict[str, Any]]:
-    by_key: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        cname = (row.get("chart_name") or chart_name).strip()
-        if cname and cname != chart_name:
-            continue
-        label = (row.get("handwritten_or_printed") or row.get("type") or "").strip()
-        if not label:
-            continue
-        conf_raw = (row.get("confidence") or "").strip()
-        conf: float | None = None
-        if conf_raw:
-            try:
-                conf = float(conf_raw)
-                if conf > 1:
-                    conf = conf / 100.0
-            except ValueError:
-                conf = None
-        fields: dict[str, Any] = {
-            "handwrittenOrPrinted": label,
-            "handwrittenOrPrintedConfidence": conf,
-        }
-        page_name = (row.get("page_name") or "").strip()
-        if page_name:
-            by_key[page_name.lower()] = fields
-            by_key[Path(page_name).name.lower()] = fields
-        raw_num = (row.get("page_number") or "").strip()
-        if raw_num.isdigit():
-            by_key[f"#{raw_num}"] = fields
-    return by_key
+    from app.services.imaging_overlays import index_hw_rows
+
+    return index_hw_rows(rows, chart_name)
 
 
 def _overlay_hw_on_pages(
@@ -331,26 +305,43 @@ class LocalFolderRepository(FolderRepository):
 
         from app.services.imaging_overlays import (
             chart_id_key,
-            monorepo_root_from_data,
             read_csv_rows,
+            resolve_pipeline_csv,
         )
 
         ids: set[str] = set()
-        root = monorepo_root_from_data(self.data_root)
         combined_files = [
-            root / "02-imaging-pipeline" / "dos-extraction" / "output" / "dos_extraction.csv",
-            root / "01-ocr-extraction" / "output" / "hw_printed.csv",
-            root / "02-imaging-pipeline" / "rotation-orientation" / "output" / "rotation.csv",
-            root
-            / "02-imaging-pipeline"
-            / "member-verification"
-            / "output"
-            / "member_extraction_results.csv",
-            root
-            / "02-imaging-pipeline"
-            / "member-verification"
-            / "output"
-            / "member_verification_summary.csv",
+            resolve_pipeline_csv(
+                self.data_root,
+                "02-imaging-pipeline",
+                "dos-extraction",
+                "output",
+                "dos_extraction.csv",
+            ),
+            resolve_pipeline_csv(
+                self.data_root, "01-ocr-extraction", "output", "hw_printed.csv"
+            ),
+            resolve_pipeline_csv(
+                self.data_root,
+                "02-imaging-pipeline",
+                "rotation-orientation",
+                "output",
+                "rotation.csv",
+            ),
+            resolve_pipeline_csv(
+                self.data_root,
+                "02-imaging-pipeline",
+                "member-verification",
+                "output",
+                "member_extraction_results.csv",
+            ),
+            resolve_pipeline_csv(
+                self.data_root,
+                "02-imaging-pipeline",
+                "member-verification",
+                "output",
+                "member_verification_summary.csv",
+            ),
         ]
         for path in combined_files:
             for row in read_csv_rows(path):
@@ -436,31 +427,30 @@ class LocalFolderRepository(FolderRepository):
         from app.services.imaging_overlays import (
             _chart_row_matches,
             chart_id_key,
-            monorepo_root_from_data,
             read_csv_rows,
+            resolve_pipeline_csv,
         )
 
-        root = monorepo_root_from_data(self.data_root)
-        dos_path = (
-            root
-            / "02-imaging-pipeline"
-            / "dos-extraction"
-            / "output"
-            / "dos_extraction.csv"
+        dos_path = resolve_pipeline_csv(
+            self.data_root,
+            "02-imaging-pipeline",
+            "dos-extraction",
+            "output",
+            "dos_extraction.csv",
         )
-        member_path = (
-            root
-            / "02-imaging-pipeline"
-            / "member-verification"
-            / "output"
-            / "member_extraction_results.csv"
+        member_path = resolve_pipeline_csv(
+            self.data_root,
+            "02-imaging-pipeline",
+            "member-verification",
+            "output",
+            "member_extraction_results.csv",
         )
-        verification_path = (
-            root
-            / "02-imaging-pipeline"
-            / "member-verification"
-            / "output"
-            / "member_verification_summary.csv"
+        verification_path = resolve_pipeline_csv(
+            self.data_root,
+            "02-imaging-pipeline",
+            "member-verification",
+            "output",
+            "member_verification_summary.csv",
         )
 
         def page_num_from_row(row: dict[str, str]) -> int | None:
@@ -864,57 +854,43 @@ class LocalFolderRepository(FolderRepository):
 
     def _dos_overlay_for_folder(self, folder_dir: Path) -> dict[str, dict[str, str | None]]:
         """Prefer imaging/<chart>_dos.csv, else combined dos_extraction.csv for this chart."""
+        from app.services.imaging_overlays import resolve_pipeline_csv
+
         chart = folder_dir.name
         per_chart = folder_dir / "imaging" / f"{chart}_dos.csv"
         rows = _read_dos_csv_rows(per_chart)
         if not rows:
-            # monorepo: …/05-imaging-ui/data/folders → …/02-imaging-pipeline/…
-            combined = (
-                self.data_root.parent.parent.parent
-                / "02-imaging-pipeline"
-                / "dos-extraction"
-                / "output"
-                / "dos_extraction.csv"
+            combined = resolve_pipeline_csv(
+                self.data_root,
+                "02-imaging-pipeline",
+                "dos-extraction",
+                "output",
+                "dos_extraction.csv",
             )
-            # nested layout fallback: imaging-ui repo without numbered packs
-            if not combined.is_file():
-                combined = (
-                    self.data_root.parent.parent
-                    / "02-imaging-pipeline"
-                    / "dos-extraction"
-                    / "output"
-                    / "dos_extraction.csv"
-                )
             rows = [
                 r
                 for r in _read_dos_csv_rows(combined)
-                if (r.get("chart_name") or "").strip() == chart
+                if (r.get("chart_name") or r.get("chart_id") or "").strip() == chart
+                or chart.startswith((r.get("chart_id") or r.get("chart_name") or "") + "_")
             ]
         return _index_dos_rows(rows, chart)
 
     def _hw_overlay_for_folder(self, folder_dir: Path) -> dict[str, dict[str, Any]]:
-        """Prefer imaging/<chart>_hw_printed.csv, else 01-ocr-extraction/output/hw_printed.csv."""
+        """Prefer imaging/<chart>_hw_printed.csv, else hw_printed.csv."""
+        from app.services.imaging_overlays import resolve_pipeline_csv
+
         chart = folder_dir.name
         per_chart = folder_dir / "imaging" / f"{chart}_hw_printed.csv"
         rows = _read_dos_csv_rows(per_chart)
         if not rows:
-            combined = (
-                self.data_root.parent.parent.parent
-                / "01-ocr-extraction"
-                / "output"
-                / "hw_printed.csv"
+            combined = resolve_pipeline_csv(
+                self.data_root, "01-ocr-extraction", "output", "hw_printed.csv"
             )
-            if not combined.is_file():
-                combined = (
-                    self.data_root.parent.parent
-                    / "01-ocr-extraction"
-                    / "output"
-                    / "hw_printed.csv"
-                )
             rows = [
                 r
                 for r in _read_dos_csv_rows(combined)
-                if (r.get("chart_name") or "").strip() == chart
+                if (r.get("chart_name") or r.get("chart_id") or "").strip() == chart
+                or chart.startswith((r.get("chart_id") or r.get("chart_name") or "") + "_")
             ]
         return _index_hw_rows(rows, chart)
 

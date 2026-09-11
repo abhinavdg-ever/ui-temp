@@ -62,6 +62,12 @@ function fmt(value: string | number | boolean | null | undefined): string {
   return String(value);
 }
 
+function fmtDegrees(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "Not Found";
+  const n = Number.isInteger(value) ? String(value) : value.toFixed(2);
+  return `${n}°`;
+}
+
 function fmtConfidence(value: number | null | undefined): string {
   if (value === null || value === undefined) return "NA";
   const pct = value <= 1 ? value * 100 : value;
@@ -178,12 +184,12 @@ function PageDetails({ page }: { page: ImagingPageResult }) {
           },
           {
             label: "Orientation Angle (Page)",
-            value: fmt(page.orientationAngle),
+            value: fmtDegrees(page.orientationAngle),
             confidence: qualityConf,
           },
           {
             label: "Tilt Angle (Text)",
-            value: fmt(page.tiltAngle),
+            value: fmtDegrees(page.tiltAngle),
             confidence: qualityConf,
           },
           {
@@ -343,8 +349,8 @@ function DocSummary({
                 <td>{fmt(p.memberDob)}</td>
                 <td>{fmt(p.memberId)}</td>
                 <td>{fmt(p.handwrittenOrPrinted)}</td>
-                <td>{fmt(p.orientationAngle)}</td>
-                <td>{fmt(p.tiltAngle)}</td>
+                <td>{fmtDegrees(p.orientationAngle)}</td>
+                <td>{fmtDegrees(p.tiltAngle)}</td>
                 <td>{fmt(p.mirrored)}</td>
                 <td>{fmt(p.dosFrom)}</td>
                 <td>{fmt(p.dosTo)}</td>

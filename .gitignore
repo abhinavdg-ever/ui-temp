@@ -16,3 +16,5 @@ frontend/dist/
 *.egg-info/
 .pytest_cache/
 **/dos-extraction/output/
+# Local pipeline CSV drop folder (keep README/.gitkeep; ignore data files)
+05-imaging-ui/data/pipeline/*.csv

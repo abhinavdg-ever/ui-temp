@@ -109,18 +109,22 @@ CREATE TRIGGER trg_ocr_results_updated_at
     BEFORE UPDATE ON ocr_results
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- Image / scan quality assessment
+-- Image / scan quality assessment (HW + rotation/orientation CSVs)
 CREATE TABLE IF NOT EXISTS ocr_quality_results (
-    id                BIGSERIAL PRIMARY KEY,
-    chart_id          BIGINT NOT NULL REFERENCES chart_list(id) ON DELETE CASCADE,
-    page_id           BIGINT NOT NULL REFERENCES page_list(id) ON DELETE CASCADE,
-    quality_tag       VARCHAR(30),                    -- e.g. 'good','low_res','blurry','faxed'
-    handwritten_flag  BOOLEAN NOT NULL DEFAULT FALSE,
-    orientation       VARCHAR(20),                    -- e.g. 'portrait','landscape','rotated_90'
-    mirror_angle      NUMERIC(6,2),
-    tilt_angle        NUMERIC(6,2),
-    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+    id                       BIGSERIAL PRIMARY KEY,
+    chart_id                 BIGINT NOT NULL REFERENCES chart_list(id) ON DELETE CASCADE,
+    page_id                  BIGINT NOT NULL REFERENCES page_list(id) ON DELETE CASCADE,
+    quality_tag              VARCHAR(30),                    -- e.g. 'good','low_res','blurry','faxed'
+    handwritten_flag         BOOLEAN NOT NULL DEFAULT FALSE,
+    handwritten_label        VARCHAR(30),                    -- Printed / Handwritten
+    handwritten_confidence   NUMERIC(5,4),
+    orientation              VARCHAR(20),                    -- e.g. '0','180','rotated_90'
+    rotation_deg             NUMERIC(8,2),
+    mirror_angle             NUMERIC(6,2),                   -- legacy; prefer mirrored
+    tilt_angle               NUMERIC(6,2),
+    mirrored                 BOOLEAN,
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_ocr_quality_chart_id ON ocr_quality_results(chart_id);
 CREATE INDEX IF NOT EXISTS idx_ocr_quality_page_id ON ocr_quality_results(page_id);

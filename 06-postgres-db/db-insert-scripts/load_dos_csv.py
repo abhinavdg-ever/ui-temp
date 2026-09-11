@@ -3,15 +3,16 @@
 
 Sources (first found wins for combined; per-chart files are additive):
   1. --csv path (optional)
-  2. 02-imaging-pipeline/dos-extraction/output/dos_extraction.csv
-  3. <data-root>/<chart>/imaging/<chart>_dos.csv  (if --per-chart / auto-discover)
+  2. 05-imaging-ui/data/pipeline/dos_extraction.csv (preferred drop folder)
+  3. mirrored pack under data/pipeline/ or monorepo dos-extraction/output
+  4. <data-root>/<chart>/imaging/<chart>_dos.csv  (if --per-chart / auto-discover)
 
 If no CSV files exist → skip (exit 0). Charts/pages must already be in Postgres
 (run load_from_folders.py first).
 
 Usage:
   python load_dos_csv.py
-  python load_dos_csv.py --csv ../../02-imaging-pipeline/dos-extraction/output/dos_extraction.csv
+  python load_dos_csv.py --csv ../../05-imaging-ui/data/pipeline/dos_extraction.csv
 """
 
 from __future__ import annotations
@@ -24,7 +25,6 @@ from datetime import date, datetime
 from pathlib import Path
 
 from load_from_folders import (
-    PG_PACK_ROOT,
     bootstrap_env,
     configure_connection,
     default_data_root,
@@ -33,10 +33,11 @@ from load_from_folders import (
     psycopg_dsn,
     _require_psycopg,
 )
-
-MONOREPO_ROOT = PG_PACK_ROOT.parent
-DEFAULT_COMBINED_CSV = (
-    MONOREPO_ROOT / "02-imaging-pipeline" / "dos-extraction" / "output" / "dos_extraction.csv"
+from pipeline_paths import (
+    DOS_FILENAMES,
+    DOS_PACK_RELS,
+    discover_named_csvs,
+    pipeline_drop_dirs,
 )
 
 
@@ -89,25 +90,30 @@ def discover_csv_paths(
     data_root: Path,
     include_per_chart: bool,
 ) -> list[Path]:
-    """Collect existing DOS CSV paths. Empty list → caller should skip."""
+    """Collect DOS CSVs from --csv, data/pipeline, packs, optional per-chart."""
     found: list[Path] = []
     seen: set[Path] = set()
 
     def add(path: Path | None) -> None:
         if path is None:
             return
-        resolved = path.resolve()
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return
         if resolved in seen or not resolved.is_file() or resolved.stat().st_size == 0:
             return
         seen.add(resolved)
         found.append(resolved)
 
     add(combined)
-
-    if include_per_chart and data_root.is_dir():
-        for folder in sorted(p for p in data_root.iterdir() if p.is_dir() and not p.name.startswith(".")):
-            chart_csv = folder / "imaging" / f"{folder.name}_dos.csv"
-            add(chart_csv)
+    for path in discover_named_csvs(
+        filenames=DOS_FILENAMES,
+        pack_rels=DOS_PACK_RELS,
+        data_root=data_root if include_per_chart else None,
+        per_chart_suffix="dos" if include_per_chart else None,
+    ):
+        add(path)
 
     return found
 
@@ -238,7 +244,7 @@ def main() -> None:
         "--csv",
         type=Path,
         default=None,
-        help="Combined DOS CSV (default: 02-imaging-pipeline/.../dos_extraction.csv)",
+        help="Combined DOS CSV (default: data/pipeline/dos_extraction.csv)",
     )
     parser.add_argument(
         "--data-root",
@@ -270,15 +276,22 @@ def main() -> None:
         )
         sys.exit(1)
 
-    combined = args.csv.resolve() if args.csv else DEFAULT_COMBINED_CSV
+    combined = args.csv.resolve() if args.csv else None
     data_root = args.data_root.resolve()
-    # Auto-include per-chart when combined is missing (still skip if none exist)
-    include_per_chart = bool(args.per_chart) or not combined.is_file()
+    # Auto-include per-chart when no explicit --csv and discovery finds nothing later
+    include_per_chart = bool(args.per_chart)
 
     paths = discover_csv_paths(combined, data_root, include_per_chart=include_per_chart)
+    if not paths and not include_per_chart:
+        # Retry with per-chart as fallback when drop folder empty
+        paths = discover_csv_paths(combined, data_root, include_per_chart=True)
+        include_per_chart = True
+
     if not paths:
         print("No DOS CSV found — skip.")
-        print(f"  looked for: {combined}")
+        print(f"  preferred: {', '.join(DOS_FILENAMES)}")
+        for drop in pipeline_drop_dirs():
+            print(f"  looked under: {drop}")
         if include_per_chart:
             print(f"  and: {data_root}/<chart>/imaging/<chart>_dos.csv")
         sys.exit(0)
