@@ -2,23 +2,26 @@
 """
 Junk / blank page classification for imaging folders → CSV.
 
-Ported from advantmed-document-processing JunkStage.
+Uses existing preliminary OCR only — does **not** re-OCR.
 
-**Input OCR: preliminary only** (`ocr/<chart>_prelim.txt`).
+Input per chart: ``ocr/<chart>_prelim.txt`` (page sections ``===== 1.jpg =====``).
 
-  1) Image ink heuristic (near-white, ≤80 dark pixels on ≤200² sample) → Blank
-  2) OCR text < 5 alphanumeric chars → Blank
-  3) Short text with “blank” / “intentionally blank” → Blank
-  4) Invoice keywords → Invoice
-  5) Cover / fax keywords → Cover
-  6) Duplicate OCR fingerprint (SHA-256, ≥50 norm chars) within chart → Duplicate
+On each page's prelim text:
+  1) empty / &lt; 5 alphanumeric chars → Blank
+  2) short text with “blank” / “intentionally blank” → Blank
+  3) invoice keywords → Invoice
+  4) cover / fax keywords → Cover
+  5) duplicate fingerprint vs earlier page in same chart → Duplicate
+  else → Main
+
+Optional ``--image``: also treat near-white page images as Blank (usually unnecessary
+when prelim OCR already exists).
 
 Usage:
   cd 02-imaging-pipeline/junk-classification
-  pip install -r requirements.txt
   python classify_junk.py
   python classify_junk.py --out ./output/junk_classification.csv
-  python classify_junk.py --no-image   # OCR / text rules only
+  python classify_junk.py --image   # optional pixel blank check
 """
 
 from __future__ import annotations
@@ -44,7 +47,9 @@ from blank import is_likely_blank_image  # noqa: E402
 from classify import (  # noqa: E402
     CLASSIFICATION_LABELS,
     CODE_BLANK,
+    CODE_COVER,
     CODE_DUPLICATE,
+    CODE_INVOICE,
     CODE_MAIN,
     classification_confidence,
     classify_text,
@@ -299,9 +304,9 @@ def main() -> None:
         help="Also write imaging/<chart>_junk.csv under each folder",
     )
     parser.add_argument(
-        "--no-image",
+        "--image",
         action="store_true",
-        help="Skip PIL blank-image check (OCR / text rules only)",
+        help="Also run pixel blank check on pages/*.jpg (default: prelim text only)",
     )
     parser.add_argument(
         "--limit",
@@ -322,10 +327,11 @@ def main() -> None:
     if args.limit and args.limit > 0:
         folders = folders[: args.limit]
 
-    use_image = not bool(args.no_image)
+    use_image = bool(args.image)
     print(f"data_root: {data_root}")
     print(f"folders: {len(folders)}")
-    print(f"image blank check: {'ON' if use_image else 'OFF'}")
+    print(f"input: ocr/*_prelim.txt only")
+    print(f"image blank check: {'ON (--image)' if use_image else 'OFF (prelim text only)'}")
     print(f"out: {args.out.resolve()}")
 
     all_rows: list[dict[str, str]] = []
