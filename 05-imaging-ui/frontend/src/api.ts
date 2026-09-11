@@ -112,7 +112,7 @@ export const OCR_STATUS_LABELS: Record<OcrRunStatus, string> = {
   IN_PROGRESS: "OCR in Progress",
   COMPLETED: "OCR Completed",
   IMAGING_IN_PROGRESS: "Imaging in Progress",
-  IMAGING_COMPLETED: "Imaging Full",
+  IMAGING_COMPLETED: "Imaging Completed",
   FAILED: "Failed",
 };
 

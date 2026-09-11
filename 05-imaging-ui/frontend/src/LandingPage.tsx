@@ -231,7 +231,7 @@ export default function LandingPage({ onView, onOpenFileViewer }: Props) {
                   <option value="IN_PROGRESS">OCR in Progress</option>
                   <option value="COMPLETED">OCR Completed</option>
                   <option value="IMAGING_IN_PROGRESS">Imaging in Progress</option>
-                  <option value="IMAGING_COMPLETED">Imaging Full</option>
+                  <option value="IMAGING_COMPLETED">Imaging Completed</option>
                   <option value="FAILED">Failed</option>
                 </select>
               </label>

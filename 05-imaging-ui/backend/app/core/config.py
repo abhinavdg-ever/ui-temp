@@ -17,8 +17,8 @@ class Settings(BaseSettings):
     data_mode: Literal["local", "postgres"] = "local"
     data_root: str = "./data/folders"
     # Local mode: stacked metadata_R{n}_B{n}.csv for Manifest Details
-    # Monorepo: ../06-postgres-db/manifest  |  Nested: ./postgres-db/manifest
-    metadata_root: str = "../06-postgres-db/manifest"
+    # Prefer data/pipeline (same drop folder as imaging CSVs)
+    metadata_root: str = "./data/pipeline"
     # Pipeline CSV drop folder (Docker: /data/pipeline). Copy pack outputs here.
     # Accepts flat files (dos_extraction.csv) or mirrored pack paths.
     pipeline_root: str = "./data/pipeline"
@@ -101,13 +101,16 @@ class Settings(BaseSettings):
 
     @property
     def resolved_metadata_root(self) -> Path:
-        """Local-mode CSV root: prefer 06-postgres-db/manifest (legacy: metadata/)."""
+        """Local-mode Manifest CSVs: prefer data/pipeline, then 06-postgres-db/manifest."""
         path = Path(self.metadata_root)
         if not path.is_absolute():
             path = (ROOT_DIR / path).resolve()
 
         candidates: list[Path] = []
-        # If .env still says .../metadata, try sibling manifest first
+        # Preferred: drop metadata_R*_B*.csv into the pipeline folder (or pipeline/manifest/)
+        pipeline = self.resolved_pipeline_root
+        candidates.extend([pipeline, pipeline / "manifest"])
+        # Explicit METADATA_ROOT (.env / Docker)
         if path.name.lower() == "metadata":
             candidates.append(path.parent / "manifest")
         candidates.append(path)
@@ -119,6 +122,7 @@ class Settings(BaseSettings):
                 ROOT_DIR.parent / "06-postgres-db" / "manifest",
                 ROOT_DIR / "postgres-db" / "metadata",
                 ROOT_DIR.parent / "06-postgres-db" / "metadata",
+                Path("/data/manifest"),
             ]
         )
 
@@ -126,7 +130,10 @@ class Settings(BaseSettings):
         with_csv: list[Path] = []
         empty_dirs: list[Path] = []
         for cand in candidates:
-            resolved = cand.resolve()
+            try:
+                resolved = cand.resolve()
+            except OSError:
+                continue
             if resolved in seen or not resolved.is_dir():
                 continue
             seen.add(resolved)
@@ -143,6 +150,10 @@ class Settings(BaseSettings):
         if with_csv:
             return with_csv[0]
         if empty_dirs:
+            # Prefer pipeline drop even when empty so new copies land in one place
+            for pref in (pipeline.resolve(), (pipeline / "manifest").resolve()):
+                if pref in empty_dirs:
+                    return pref
             return empty_dirs[0]
         return path
 

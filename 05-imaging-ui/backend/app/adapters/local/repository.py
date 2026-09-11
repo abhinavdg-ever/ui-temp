@@ -250,18 +250,18 @@ class LocalFolderRepository(FolderRepository):
       ocr/<folder_name>_final2.json   # Final (AzDocInt) — JSON with pages[].content
       # text OCR sections: ===== 1.jpg =====
 
-    Manifest Details (DATA_MODE=local): stacked metadata_R{n}_B{n}.csv under metadata_root
-    (default 06-postgres-db/manifest). Postgres mode reads manifest_member_list from DB instead.
+    Manifest Details (DATA_MODE=local): metadata_R{n}_B{n}.csv under data/pipeline
+    (falls back to 06-postgres-db/manifest). Postgres mode reads manifest_member_list.
     """
 
     def __init__(self, data_root: Path, metadata_root: Path | None = None):
         self.data_root = data_root
         self.metadata_root = metadata_root
         self._overlay_chart_ids: set[str] | None = None
-        # chart key → page numbers that have BOTH member + DOS CSV entries
-        self._member_and_dos_pages: dict[str, set[int]] | None = None
-        # charts with member_verification_summary + any DOS (Imaging Full)
-        self._imaging_full_charts: set[str] | None = None
+        # chart → which of the 4 pipeline outputs are present (excl. manifest)
+        self._pipeline_streams: dict[str, set[str]] | None = None
+        # chart → page numbers seen in any page-level pipeline CSV
+        self._pipeline_pages: dict[str, set[int]] | None = None
 
     def _folder_dir(self, folder_id: str) -> Path:
         if "/" in folder_id or "\\" in folder_id or folder_id in (".", ".."):
@@ -380,30 +380,29 @@ class LocalFolderRepository(FolderRepository):
         return chart in ids or chart_id_key(chart) in ids
 
     def _imaging_processed_count(self, folder_dir: Path, page_count: int) -> int:
-        """Count Imaging pages; Full charts report page_count."""
+        """Count Imaging pages; Completed charts report page_count."""
         if page_count == 0:
             return 0
         if self._imaging_is_full(folder_dir.name):
             return page_count
         pages = self._page_files(folder_dir)
-        ready = self._member_and_dos_page_set(folder_dir.name)
+        ready = self._pipeline_page_set(folder_dir.name)
         if not ready:
+            # Chart-level hit (e.g. verification summary only) → show progress as 1+
+            if self._pipeline_stream_set(folder_dir.name):
+                return min(page_count, max(1, len(self._pipeline_stream_set(folder_dir.name))))
             return 0
         count = 0
         for num, path in pages:
-            if self._page_has_member_and_dos(num, path.name, ready):
+            if self._page_has_pipeline_data(num, path.name, ready):
                 count += 1
         return count
 
     def _imaging_is_full(self, chart_name: str) -> bool:
-        """True when member verification summary + DOS exist for this chart."""
-        self._member_and_dos_pages_index()  # ensure caches built
-        full = self._imaging_full_charts or set()
-        from app.services.imaging_overlays import chart_id_key
+        """True when all 4 pipeline outputs exist for this chart (excl. manifest)."""
+        return len(self._pipeline_stream_set(chart_name)) >= 4
 
-        return chart_name in full or chart_id_key(chart_name) in full
-
-    def _page_has_member_and_dos(
+    def _page_has_pipeline_data(
         self, page_number: int, filename: str, ready: set[int]
     ) -> bool:
         if page_number in ready:
@@ -413,16 +412,39 @@ class LocalFolderRepository(FolderRepository):
             return True
         return False
 
-    def _member_and_dos_page_set(self, chart_name: str) -> set[int]:
-        index = self._member_and_dos_pages_index()
+    def _pipeline_page_set(self, chart_name: str) -> set[int]:
+        index = self._pipeline_coverage_index()[1]
         from app.services.imaging_overlays import chart_id_key
 
         return set(index.get(chart_name, set()) | index.get(chart_id_key(chart_name), set()))
 
-    def _member_and_dos_pages_index(self) -> dict[str, set[int]]:
-        """Cached chart → page numbers present in both member + DOS combined CSVs."""
-        if self._member_and_dos_pages is not None:
-            return self._member_and_dos_pages
+    def _pipeline_stream_set(self, chart_name: str) -> set[str]:
+        streams, _ = self._pipeline_coverage_index()
+        from app.services.imaging_overlays import chart_id_key
+
+        out: set[str] = set()
+        out |= streams.get(chart_name, set())
+        out |= streams.get(chart_id_key(chart_name), set())
+        # Merge keys that match via prefix/full id
+        from app.services.imaging_overlays import _chart_row_matches
+
+        for key, vals in streams.items():
+            if key in {chart_name, chart_id_key(chart_name)}:
+                continue
+            if _chart_row_matches(key, chart_name):
+                out |= vals
+        return out
+
+    def _pipeline_coverage_index(
+        self,
+    ) -> tuple[dict[str, set[str]], dict[str, set[int]]]:
+        """Cached chart → pipeline streams + page numbers.
+
+        The 4 imaging outputs (manifest is separate / not counted for status):
+          hw | rotation | dos | member
+        """
+        if self._pipeline_streams is not None and self._pipeline_pages is not None:
+            return self._pipeline_streams, self._pipeline_pages
 
         from app.services.imaging_overlays import (
             _chart_row_matches,
@@ -431,27 +453,39 @@ class LocalFolderRepository(FolderRepository):
             resolve_pipeline_csv,
         )
 
-        dos_path = resolve_pipeline_csv(
-            self.data_root,
-            "02-imaging-pipeline",
-            "dos-extraction",
-            "output",
-            "dos_extraction.csv",
-        )
-        member_path = resolve_pipeline_csv(
-            self.data_root,
-            "02-imaging-pipeline",
-            "member-verification",
-            "output",
-            "member_extraction_results.csv",
-        )
-        verification_path = resolve_pipeline_csv(
-            self.data_root,
-            "02-imaging-pipeline",
-            "member-verification",
-            "output",
-            "member_verification_summary.csv",
-        )
+        paths = {
+            "hw": resolve_pipeline_csv(
+                self.data_root, "01-ocr-extraction", "output", "hw_printed.csv"
+            ),
+            "rotation": resolve_pipeline_csv(
+                self.data_root,
+                "02-imaging-pipeline",
+                "rotation-orientation",
+                "output",
+                "rotation.csv",
+            ),
+            "dos": resolve_pipeline_csv(
+                self.data_root,
+                "02-imaging-pipeline",
+                "dos-extraction",
+                "output",
+                "dos_extraction.csv",
+            ),
+            "member_extraction": resolve_pipeline_csv(
+                self.data_root,
+                "02-imaging-pipeline",
+                "member-verification",
+                "output",
+                "member_extraction_results.csv",
+            ),
+            "member_verification": resolve_pipeline_csv(
+                self.data_root,
+                "02-imaging-pipeline",
+                "member-verification",
+                "output",
+                "member_verification_summary.csv",
+            ),
+        }
 
         def page_num_from_row(row: dict[str, str]) -> int | None:
             for col in ("page_num", "page_number"):
@@ -471,7 +505,9 @@ class LocalFolderRepository(FolderRepository):
             return None
 
         def chart_keys(row: dict[str, str]) -> list[str]:
-            raw = (row.get("chart_id") or row.get("chart_name") or row.get("folder") or "").strip()
+            raw = (
+                row.get("chart_id") or row.get("chart_name") or row.get("folder") or ""
+            ).strip()
             if not raw:
                 return []
             keys = [raw]
@@ -492,38 +528,83 @@ class LocalFolderRepository(FolderRepository):
                     return True
             return False
 
-        member_pages: dict[str, set[int]] = {}
-        for row in read_csv_rows(member_path):
-            num = page_num_from_row(row)
-            if num is None:
-                continue
-            for key in chart_keys(row):
-                member_pages.setdefault(key, set()).add(num)
+        def row_has_hw(row: dict[str, str]) -> bool:
+            label = (
+                row.get("handwritten")
+                or row.get("handwritten_or_printed")
+                or row.get("type")
+                or ""
+            ).strip()
+            return bool(label) and label.upper() != "N/A"
 
-        dos_pages: dict[str, set[int]] = {}
-        dos_charts: set[str] = set()
-        for row in read_csv_rows(dos_path):
-            if not row_has_dos(row):
-                continue
-            for key in chart_keys(row):
-                dos_charts.add(key)
-            num = page_num_from_row(row)
-            if num is None:
-                continue
-            for key in chart_keys(row):
-                dos_pages.setdefault(key, set()).add(num)
+        def row_has_rotation(row: dict[str, str]) -> bool:
+            for col in (
+                "rotation_deg",
+                "rotation_degree",
+                "rotation_di",
+                "orientation_angle",
+                "rotation",
+                "tilt_angle",
+                "tilt_angle_c",
+                "tilt_angle_deg",
+                "mirrored",
+            ):
+                if (row.get(col) or "").strip():
+                    return True
+            return False
 
-        verification_charts: set[str] = set()
-        for row in read_csv_rows(verification_path):
+        def row_has_member_extraction(row: dict[str, str]) -> bool:
+            for col in (
+                "extracted_name",
+                "extracted_dob",
+                "provided_member_id",
+                "confidence",
+            ):
+                if (row.get(col) or "").strip():
+                    return True
+            return False
+
+        def row_has_verification(row: dict[str, str]) -> bool:
             status = (row.get("final_status") or row.get("status") or "").strip()
             reason = (row.get("decision_reason") or "").strip()
             conf = (row.get("confidence") or row.get("matched_confidence") or "").strip()
-            if not any([status, reason, conf]):
-                continue
-            for key in chart_keys(row):
-                verification_charts.add(key)
+            return bool(status or reason or conf)
 
-        # Also include per-chart overrides under data/folders/*/imaging/
+        streams: dict[str, set[str]] = {}
+        pages: dict[str, set[int]] = {}
+
+        def mark(stream: str, keys: list[str], page_num: int | None) -> None:
+            for key in keys:
+                streams.setdefault(key, set()).add(stream)
+                if page_num is not None:
+                    pages.setdefault(key, set()).add(page_num)
+
+        for row in read_csv_rows(paths["hw"]):
+            if not row_has_hw(row):
+                continue
+            mark("hw", chart_keys(row), page_num_from_row(row))
+
+        for row in read_csv_rows(paths["rotation"]):
+            if not row_has_rotation(row):
+                continue
+            mark("rotation", chart_keys(row), page_num_from_row(row))
+
+        for row in read_csv_rows(paths["dos"]):
+            if not row_has_dos(row):
+                continue
+            mark("dos", chart_keys(row), page_num_from_row(row))
+
+        for row in read_csv_rows(paths["member_extraction"]):
+            if not row_has_member_extraction(row):
+                continue
+            mark("member", chart_keys(row), page_num_from_row(row))
+
+        for row in read_csv_rows(paths["member_verification"]):
+            if not row_has_verification(row):
+                continue
+            mark("member", chart_keys(row), None)
+
+        # Per-chart overrides under data/folders/*/imaging/
         if self.data_root.is_dir():
             for entry in self.data_root.iterdir():
                 if not entry.is_dir() or entry.name.startswith("."):
@@ -532,75 +613,45 @@ class LocalFolderRepository(FolderRepository):
                 if not imaging.is_dir():
                     continue
                 chart = entry.name
+                keys = [chart, chart_id_key(chart)]
                 for path in imaging.iterdir():
                     if not path.is_file() or path.name.startswith("._"):
                         continue
                     name = path.name.lower()
-                    if name.endswith("_member_extraction.csv"):
+                    if name.endswith("_hw_printed.csv"):
                         for row in read_csv_rows(path):
-                            num = page_num_from_row(row)
-                            if num is None:
-                                continue
-                            member_pages.setdefault(chart, set()).add(num)
-                            member_pages.setdefault(chart_id_key(chart), set()).add(num)
-                    if name.endswith("_dos.csv"):
+                            if row_has_hw(row):
+                                mark("hw", keys, page_num_from_row(row))
+                    elif name.endswith("_rotation.csv"):
                         for row in read_csv_rows(path):
-                            if not row_has_dos(row):
-                                continue
-                            dos_charts.add(chart)
-                            dos_charts.add(chart_id_key(chart))
-                            num = page_num_from_row(row)
-                            if num is None:
-                                continue
-                            dos_pages.setdefault(chart, set()).add(num)
-                            dos_pages.setdefault(chart_id_key(chart), set()).add(num)
-                    if name.endswith("_member_verification.csv"):
+                            if row_has_rotation(row):
+                                mark("rotation", keys, page_num_from_row(row))
+                    elif name.endswith("_dos.csv"):
                         for row in read_csv_rows(path):
-                            status = (row.get("final_status") or "").strip()
-                            if not status and not (row.get("decision_reason") or "").strip():
-                                continue
-                            verification_charts.add(chart)
-                            verification_charts.add(chart_id_key(chart))
+                            if row_has_dos(row):
+                                mark("dos", keys, page_num_from_row(row))
+                    elif name.endswith("_member_extraction.csv"):
+                        for row in read_csv_rows(path):
+                            if row_has_member_extraction(row):
+                                mark("member", keys, page_num_from_row(row))
+                    elif name.endswith("_member_verification.csv"):
+                        for row in read_csv_rows(path):
+                            if row_has_verification(row):
+                                mark("member", keys, None)
 
-        both: dict[str, set[int]] = {}
-        all_keys = set(member_pages) | set(dos_pages)
-        for key in all_keys:
-            # Cross-match full id vs numeric prefix sets
-            mset = set(member_pages.get(key, set()))
-            dset = set(dos_pages.get(key, set()))
+        # Ensure prefix/full-id aliases share stream membership
+        for key in list(streams.keys()):
             cid = chart_id_key(key)
-            if cid != key:
-                mset |= member_pages.get(cid, set())
-                dset |= dos_pages.get(cid, set())
-            # Also pull full-id pages when key is numeric
-            for other in list(member_pages):
+            if cid != key and cid in streams:
+                streams[key] |= streams[cid]
+                streams[cid] |= streams[key]
+            for other in list(streams.keys()):
                 if other != key and _chart_row_matches(other, key):
-                    mset |= member_pages[other]
-            for other in list(dos_pages):
-                if other != key and _chart_row_matches(other, key):
-                    dset |= dos_pages[other]
-            inter = mset & dset
-            if inter:
-                both[key] = inter
+                    streams[key] |= streams[other]
 
-        full_charts: set[str] = set()
-        for key in verification_charts:
-            if key in dos_charts:
-                full_charts.add(key)
-                full_charts.add(chart_id_key(key))
-                continue
-            # DOS may be keyed under matching full/prefix id
-            if any(_chart_row_matches(d, key) for d in dos_charts):
-                full_charts.add(key)
-                full_charts.add(chart_id_key(key))
-        for key in dos_charts:
-            if any(_chart_row_matches(v, key) for v in verification_charts):
-                full_charts.add(key)
-                full_charts.add(chart_id_key(key))
-
-        self._member_and_dos_pages = both
-        self._imaging_full_charts = full_charts
-        return both
+        self._pipeline_streams = streams
+        self._pipeline_pages = pages
+        return streams, pages
 
     def _dummy_manifest(self) -> ImagingManifestDetails:
         return ImagingManifestDetails(
@@ -713,17 +764,17 @@ class LocalFolderRepository(FolderRepository):
     ) -> OcrRunStatus:
         """Folder status for History.
 
-        - Member verification + DOS for chart → Imaging Full
-        - Some pages with Member + DOS → Imaging in Progress
+        - All 4 pipeline outputs (HW, rotation, DOS, member) → Imaging Completed
+        - Any 1+ of those outputs → Imaging in Progress
+        - Manifest does not affect status
         - All 3 OCR done, imaging not started → OCR Completed
         - Partial OCR → OCR in Progress
         - No OCR → Queued
         """
-        if self._imaging_is_full(folder_dir.name) or (
-            page_count > 0 and imaging_processed >= page_count and imaging_processed > 0
-        ):
+        streams = self._pipeline_stream_set(folder_dir.name)
+        if len(streams) >= 4:
             return "IMAGING_COMPLETED"
-        if imaging_processed > 0:
+        if streams or imaging_processed > 0:
             return "IMAGING_IN_PROGRESS"
         present = sum(1 for kind in OCR_KINDS if self._has_ocr(folder_dir, kind))
         if present == len(OCR_KINDS):
@@ -784,7 +835,7 @@ class LocalFolderRepository(FolderRepository):
         has_prelim = self._has_ocr(folder_dir, "preliminary")
         has_final1 = self._has_ocr(folder_dir, "final1")
         has_final2 = self._has_ocr(folder_dir, "final2")
-        ready = self._member_and_dos_page_set(folder_dir.name)
+        ready = self._pipeline_page_set(folder_dir.name)
         imaging_full = self._imaging_is_full(folder_dir.name)
         page_summaries = [
             PageSummary(
@@ -795,7 +846,7 @@ class LocalFolderRepository(FolderRepository):
                 has_final1_ocr=has_final1,
                 has_final2_ocr=has_final2,
                 has_imaging=imaging_full
-                or self._page_has_member_and_dos(num, path.name, ready),
+                or self._page_has_pipeline_data(num, path.name, ready),
             )
             for num, path in pages
         ]
