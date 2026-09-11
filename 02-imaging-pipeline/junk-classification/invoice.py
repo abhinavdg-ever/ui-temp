@@ -9,7 +9,6 @@ INVOICE_KEYWORDS = [
     "bill to",
     "ship to",
     "unit price",
-    "price",
     "amount due",
     "payment due",
     "remittance",

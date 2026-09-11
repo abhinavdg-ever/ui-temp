@@ -7,6 +7,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
+import PageJump from "./PageJump";
 
 type Props = {
   pageIndex: number;
@@ -19,6 +20,7 @@ type Props = {
   onZoomReset: () => void;
   onPrev: () => void;
   onNext: () => void;
+  onJump: (pageIndex: number) => void;
   onExitFullscreen: () => void;
   label?: string;
 };
@@ -37,6 +39,7 @@ export default function FullscreenPageChrome({
   onZoomReset,
   onPrev,
   onNext,
+  onJump,
   onExitFullscreen,
   label,
 }: Props) {
@@ -147,10 +150,13 @@ export default function FullscreenPageChrome({
         <button type="button" onClick={onPrev} disabled={pageIndex <= 0} aria-label="Previous page" title="Previous (←)">
           <ChevronLeft size={16} />
         </button>
-        <span className="fs-chrome-label">
-          {pageCount === 0 ? "—" : `${pageIndex + 1} / ${pageCount}`}
-          {label ? ` · ${label}` : ""}
-        </span>
+        <PageJump
+          pageIndex={pageIndex}
+          pageCount={pageCount}
+          onJump={onJump}
+          className="fs-chrome-label"
+          suffix={label ? ` · ${label}` : undefined}
+        />
         <button
           type="button"
           onClick={onNext}

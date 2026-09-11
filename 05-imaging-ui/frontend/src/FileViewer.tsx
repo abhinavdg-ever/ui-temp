@@ -31,6 +31,7 @@ import {
 } from "./blobAuth";
 import BlobAuthModal from "./BlobAuthModal";
 import FullscreenPageChrome from "./FullscreenPageChrome";
+import PageJump from "./PageJump";
 import { useImagePan } from "./useImagePan";
 import { usePageViewerHotkeys } from "./usePageViewerHotkeys";
 
@@ -424,9 +425,14 @@ export default function FileViewer({ onBack, initialFolderId = null }: Props) {
                     >
                       <ChevronLeft size={16} />
                     </button>
-                    <span className="pager-label">
-                      {pageCount === 0 ? "—" : `${pageIndex + 1} / ${pageCount}`}
-                    </span>
+                    <PageJump
+                      pageIndex={pageIndex}
+                      pageCount={pageCount}
+                      onJump={(idx) => {
+                        setPageIndex(idx);
+                        resetZoom();
+                      }}
+                    />
                     <button
                       type="button"
                       disabled={pageIndex >= pageCount - 1}
@@ -476,6 +482,10 @@ export default function FileViewer({ onBack, initialFolderId = null }: Props) {
                       }}
                       onNext={() => {
                         setPageIndex((i) => Math.min(pageCount - 1, i + 1));
+                        resetZoom();
+                      }}
+                      onJump={(idx) => {
+                        setPageIndex(idx);
                         resetZoom();
                       }}
                       onExitFullscreen={exitFullscreen}
