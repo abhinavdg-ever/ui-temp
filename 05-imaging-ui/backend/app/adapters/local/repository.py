@@ -406,9 +406,12 @@ class LocalFolderRepository(FolderRepository):
                 count += 1
         return count
 
+    # Streams that mark Imaging Completed (HW optional; counts only for In Progress).
+    _IMAGING_COMPLETE_STREAMS = frozenset({"rotation", "dos", "member"})
+
     def _imaging_is_full(self, chart_name: str) -> bool:
-        """True when all 4 pipeline outputs exist for this chart (excl. manifest)."""
-        return len(self._pipeline_stream_set(chart_name)) >= 4
+        """True when rotation + DOS + member exist (HW not required)."""
+        return self._IMAGING_COMPLETE_STREAMS.issubset(self._pipeline_stream_set(chart_name))
 
     def _page_has_pipeline_data(
         self, page_number: int, filename: str, ready: set[int]
@@ -448,8 +451,9 @@ class LocalFolderRepository(FolderRepository):
     ) -> tuple[dict[str, set[str]], dict[str, set[int]]]:
         """Cached chart → pipeline streams + page numbers.
 
-        The 4 imaging outputs (manifest is separate / not counted for status):
+        Streams (manifest not counted for status):
           hw | rotation | dos | member
+        Imaging Completed needs rotation + dos + member; hw only affects In Progress.
         """
         if self._pipeline_streams is not None and self._pipeline_pages is not None:
             return self._pipeline_streams, self._pipeline_pages
@@ -775,8 +779,8 @@ class LocalFolderRepository(FolderRepository):
         OCR gates imaging: if any of the 3 OCR outputs is missing, status is
         OCR in Progress (or Queued) — never Imaging *, even if pipeline CSVs exist.
 
-        - All 3 OCR + all 4 pipeline outputs → Imaging Completed
-        - All 3 OCR + any pipeline output → Imaging in Progress
+        - All 3 OCR + rotation + DOS + member → Imaging Completed (HW optional)
+        - All 3 OCR + any of HW / rotation / DOS / member → Imaging in Progress
         - All 3 OCR, no imaging → OCR Completed
         - Partial OCR → OCR in Progress
         - No OCR → Queued
@@ -786,7 +790,7 @@ class LocalFolderRepository(FolderRepository):
             return "IN_PROGRESS" if present > 0 else "QUEUED"
 
         streams = self._pipeline_stream_set(folder_dir.name)
-        if len(streams) >= 4:
+        if self._IMAGING_COMPLETE_STREAMS.issubset(streams):
             return "IMAGING_COMPLETED"
         if streams or imaging_processed > 0:
             return "IMAGING_IN_PROGRESS"
