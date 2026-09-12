@@ -119,11 +119,18 @@ class PostgresFolderRepository(FolderRepository):
             if k in kinds_present
         )
         if ocr_processed == 3:
-            ocr_status = "COMPLETED"
+            # Keep imaging-aware status from local when OCR is complete
+            ocr_status = detail.ocr_status
+            if ocr_status not in (
+                "IMAGING_COMPLETED",
+                "IMAGING_IN_PROGRESS",
+                "COMPLETED",
+            ):
+                ocr_status = "COMPLETED"
         elif ocr_processed > 0:
             ocr_status = "IN_PROGRESS"
         else:
-            ocr_status = detail.ocr_status
+            ocr_status = "QUEUED"
 
         return FolderDetail(
             id=detail.id,

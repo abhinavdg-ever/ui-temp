@@ -772,24 +772,25 @@ class LocalFolderRepository(FolderRepository):
     ) -> OcrRunStatus:
         """Folder status for History.
 
-        - All 4 pipeline outputs (HW, rotation, DOS, member) → Imaging Completed
-        - Any 1+ of those outputs → Imaging in Progress
-        - Manifest does not affect status
-        - All 3 OCR done, imaging not started → OCR Completed
+        OCR gates imaging: if any of the 3 OCR outputs is missing, status is
+        OCR in Progress (or Queued) — never Imaging *, even if pipeline CSVs exist.
+
+        - All 3 OCR + all 4 pipeline outputs → Imaging Completed
+        - All 3 OCR + any pipeline output → Imaging in Progress
+        - All 3 OCR, no imaging → OCR Completed
         - Partial OCR → OCR in Progress
         - No OCR → Queued
         """
+        present = sum(1 for kind in OCR_KINDS if self._has_ocr(folder_dir, kind))
+        if present < len(OCR_KINDS):
+            return "IN_PROGRESS" if present > 0 else "QUEUED"
+
         streams = self._pipeline_stream_set(folder_dir.name)
         if len(streams) >= 4:
             return "IMAGING_COMPLETED"
         if streams or imaging_processed > 0:
             return "IMAGING_IN_PROGRESS"
-        present = sum(1 for kind in OCR_KINDS if self._has_ocr(folder_dir, kind))
-        if present == len(OCR_KINDS):
-            return "COMPLETED"
-        if present > 0:
-            return "IN_PROGRESS"
-        return "QUEUED"
+        return "COMPLETED"
 
     def _touch_paths(self, folder_dir: Path, pages: list[tuple[int, Path]]) -> list[Path]:
         paths = [folder_dir, *(p for _, p in pages)]
