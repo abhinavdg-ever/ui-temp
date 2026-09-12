@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 
 from db_common import (
+    BATCH_SIZE,
     PG_PACK_ROOT,
     bootstrap_env,
     chart_blob_path,
@@ -31,6 +32,7 @@ from db_common import (
     default_data_root,
     default_pipeline_root,
     describe_dsn,
+    iter_batches,
     list_page_files,
     psycopg_dsn,
     require_psycopg,
@@ -157,6 +159,8 @@ def sync_chart_csvs(
 
 
 def _copy_csv(cur: object, table: str, headers: list[str], rows: list[dict[str, str]]) -> None:
+    if not rows:
+        return
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=headers, extrasaction="ignore", lineterminator="\n")
     for row in rows:
@@ -170,16 +174,108 @@ def _copy_csv(cur: object, table: str, headers: list[str], rows: list[dict[str, 
             copy.write(chunk)
 
 
+def _apply_chart_batch(cur: object) -> None:
+    cur.execute(
+        """
+        UPDATE chart_list c
+           SET page_count = NULLIF(s.page_count, '')::INT,
+               status = COALESCE(NULLIF(s.status, ''), c.status),
+               path = COALESCE(NULLIF(s.path, ''), c.path),
+               blob_container_name = COALESCE(
+                   NULLIF(s.blob_container_name, ''), c.blob_container_name
+               ),
+               run_id = COALESCE(NULLIF(s.run_id, ''), c.run_id),
+               batch_id = COALESCE(NULLIF(s.batch_id, ''), c.batch_id),
+               updated_at = now()
+          FROM stg_chart s
+         WHERE c.chart_name = s.chart_name
+           AND c.id = (
+               SELECT MIN(c2.id) FROM chart_list c2
+                WHERE c2.chart_name = s.chart_name
+           )
+        """
+    )
+    cur.execute(
+        """
+        INSERT INTO chart_list
+            (chart_name, page_count, status, path, blob_container_name, run_id, batch_id)
+        SELECT
+            s.chart_name,
+            COALESCE(NULLIF(s.page_count, '')::INT, 0),
+            COALESCE(NULLIF(s.status, ''), 'received'),
+            NULLIF(s.path, ''),
+            NULLIF(s.blob_container_name, ''),
+            NULLIF(s.run_id, ''),
+            NULLIF(s.batch_id, '')
+        FROM stg_chart s
+        WHERE NOT EXISTS (
+            SELECT 1 FROM chart_list c WHERE c.chart_name = s.chart_name
+        )
+        """
+    )
+
+
+def _apply_page_batch(cur: object) -> None:
+    cur.execute(
+        """
+        UPDATE page_list p
+           SET ocr_prelim_status = COALESCE(
+                   NULLIF(s.ocr_prelim_status, ''), p.ocr_prelim_status
+               ),
+               ocr_final_status = COALESCE(
+                   NULLIF(s.ocr_final_status, ''), p.ocr_final_status
+               ),
+               updated_at = now()
+          FROM stg_page s
+          JOIN (
+              SELECT DISTINCT ON (chart_name) id, chart_name
+              FROM chart_list
+              ORDER BY chart_name, id
+          ) c ON c.chart_name = s.chart_name
+         WHERE p.chart_id = c.id
+           AND p.page_name = s.page_name
+        """
+    )
+    cur.execute(
+        """
+        INSERT INTO page_list
+            (chart_id, page_name, ocr_prelim_status, ocr_final_status)
+        SELECT
+            c.id,
+            s.page_name,
+            COALESCE(NULLIF(s.ocr_prelim_status, ''), 'pending'),
+            COALESCE(NULLIF(s.ocr_final_status, ''), 'pending')
+        FROM stg_page s
+        JOIN (
+            SELECT DISTINCT ON (chart_name) id, chart_name
+            FROM chart_list
+            ORDER BY chart_name, id
+        ) c ON c.chart_name = s.chart_name
+        WHERE s.page_name <> ''
+          AND NOT EXISTS (
+              SELECT 1 FROM page_list p
+               WHERE p.chart_id = c.id AND p.page_name = s.page_name
+          )
+        """
+    )
+
+
 def load_csvs_into_db(conn: object, *, chart_csv: Path, page_csv: Path) -> None:
-    """Step 2: load chart_list.csv / page_list.csv into Postgres tables."""
+    """Step 2: load chart_list.csv / page_list.csv into Postgres in batches of 10k."""
     chart_rows = _read_csv(chart_csv)
     page_rows = _read_csv(page_csv)
     if not chart_rows:
         print(f"No rows in {chart_csv} — nothing to load")
         return
 
-    print(f"Loading {chart_csv.name} ({len(chart_rows)} rows) → chart_list …")
-    print(f"Loading {page_csv.name} ({len(page_rows)} rows) → page_list …")
+    print(
+        f"Loading {chart_csv.name} ({len(chart_rows)} rows) → chart_list "
+        f"in batches of {BATCH_SIZE} …"
+    )
+    print(
+        f"Loading {page_csv.name} ({len(page_rows)} rows) → page_list "
+        f"in batches of {BATCH_SIZE} …"
+    )
 
     with conn.cursor() as cur:
         cur.execute(
@@ -192,7 +288,7 @@ def load_csvs_into_db(conn: object, *, chart_csv: Path, page_csv: Path) -> None:
                 blob_container_name TEXT,
                 run_id TEXT,
                 batch_id TEXT
-            ) ON COMMIT DROP
+            ) ON COMMIT DELETE ROWS
             """
         )
         cur.execute(
@@ -203,98 +299,22 @@ def load_csvs_into_db(conn: object, *, chart_csv: Path, page_csv: Path) -> None:
                 page_number TEXT,
                 ocr_prelim_status TEXT,
                 ocr_final_status TEXT
-            ) ON COMMIT DROP
-            """
-        )
-        _copy_csv(cur, "stg_chart", CHART_HEADERS, chart_rows)
-        if page_rows:
-            _copy_csv(cur, "stg_page", PAGE_HEADERS, page_rows)
-
-        # Update existing charts (keep lowest id if duplicates)
-        cur.execute(
-            """
-            UPDATE chart_list c
-               SET page_count = NULLIF(s.page_count, '')::INT,
-                   status = COALESCE(NULLIF(s.status, ''), c.status),
-                   path = COALESCE(NULLIF(s.path, ''), c.path),
-                   blob_container_name = COALESCE(
-                       NULLIF(s.blob_container_name, ''), c.blob_container_name
-                   ),
-                   run_id = COALESCE(NULLIF(s.run_id, ''), c.run_id),
-                   batch_id = COALESCE(NULLIF(s.batch_id, ''), c.batch_id),
-                   updated_at = now()
-              FROM stg_chart s
-             WHERE c.chart_name = s.chart_name
-               AND c.id = (
-                   SELECT MIN(c2.id) FROM chart_list c2
-                    WHERE c2.chart_name = s.chart_name
-               )
-            """
-        )
-        cur.execute(
-            """
-            INSERT INTO chart_list
-                (chart_name, page_count, status, path, blob_container_name, run_id, batch_id)
-            SELECT
-                s.chart_name,
-                COALESCE(NULLIF(s.page_count, '')::INT, 0),
-                COALESCE(NULLIF(s.status, ''), 'received'),
-                NULLIF(s.path, ''),
-                NULLIF(s.blob_container_name, ''),
-                NULLIF(s.run_id, ''),
-                NULLIF(s.batch_id, '')
-            FROM stg_chart s
-            WHERE NOT EXISTS (
-                SELECT 1 FROM chart_list c WHERE c.chart_name = s.chart_name
-            )
+            ) ON COMMIT DELETE ROWS
             """
         )
 
-        # Update existing pages
-        cur.execute(
-            """
-            UPDATE page_list p
-               SET ocr_prelim_status = COALESCE(
-                       NULLIF(s.ocr_prelim_status, ''), p.ocr_prelim_status
-                   ),
-                   ocr_final_status = COALESCE(
-                       NULLIF(s.ocr_final_status, ''), p.ocr_final_status
-                   ),
-                   updated_at = now()
-              FROM stg_page s
-              JOIN (
-                  SELECT DISTINCT ON (chart_name) id, chart_name
-                  FROM chart_list
-                  ORDER BY chart_name, id
-              ) c ON c.chart_name = s.chart_name
-             WHERE p.chart_id = c.id
-               AND p.page_name = s.page_name
-            """
-        )
-        cur.execute(
-            """
-            INSERT INTO page_list
-                (chart_id, page_name, ocr_prelim_status, ocr_final_status)
-            SELECT
-                c.id,
-                s.page_name,
-                COALESCE(NULLIF(s.ocr_prelim_status, ''), 'pending'),
-                COALESCE(NULLIF(s.ocr_final_status, ''), 'pending')
-            FROM stg_page s
-            JOIN (
-                SELECT DISTINCT ON (chart_name) id, chart_name
-                FROM chart_list
-                ORDER BY chart_name, id
-            ) c ON c.chart_name = s.chart_name
-            WHERE s.page_name <> ''
-              AND NOT EXISTS (
-                  SELECT 1 FROM page_list p
-                   WHERE p.chart_id = c.id AND p.page_name = s.page_name
-              )
-            """
-        )
+        for batch_i, batch_n, batch in iter_batches(chart_rows):
+            _copy_csv(cur, "stg_chart", CHART_HEADERS, batch)
+            _apply_chart_batch(cur)
+            conn.commit()
+            print(f"  chart_list batch {batch_i}/{batch_n}: {len(batch)} rows")
 
-    conn.commit()
+        for batch_i, batch_n, batch in iter_batches(page_rows):
+            _copy_csv(cur, "stg_page", PAGE_HEADERS, batch)
+            _apply_page_batch(cur)
+            conn.commit()
+            print(f"  page_list batch {batch_i}/{batch_n}: {len(batch)} rows")
+
     print(
         f"Done — loaded {len(chart_rows)} charts and {len(page_rows)} pages "
         f"from CSV into chart_list / page_list"

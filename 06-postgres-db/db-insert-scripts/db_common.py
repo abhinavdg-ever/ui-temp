@@ -22,6 +22,18 @@ IMAGE_RE = re.compile(r"\.(jpe?g|png|webp|tif{1,2})$", re.IGNORECASE)
 PAGE_NUM_RE = re.compile(r"^(\d+)\.(jpe?g|png|webp|tif{1,2})$", re.IGNORECASE)
 METADATA_FILE_RE = re.compile(r"^metadata_R(\d+)_B(\d+)\.csv$", re.IGNORECASE)
 
+# Postgres COPY / upsert chunk size
+BATCH_SIZE = 10_000
+
+
+def iter_batches(rows: list, size: int = BATCH_SIZE):
+    """Yield (1-based batch index, total_batches, slice)."""
+    if not rows:
+        return
+    total = (len(rows) + size - 1) // size
+    for i in range(0, len(rows), size):
+        yield i // size + 1, total, rows[i : i + size]
+
 
 def find_imaging_ui_root() -> Path | None:
     """Locate imaging-ui for DATA_ROOT / .env (sibling or parent of postgres-db pack)."""

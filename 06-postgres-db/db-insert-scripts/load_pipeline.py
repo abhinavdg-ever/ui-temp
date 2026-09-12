@@ -24,6 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 from db_common import (
+    BATCH_SIZE,
     METADATA_FILE_RE,
     bootstrap_env,
     chart_blob_path,
@@ -31,6 +32,7 @@ from db_common import (
     default_metadata_dir,
     default_pipeline_root,
     describe_dsn,
+    iter_batches,
     psycopg_dsn,
     require_psycopg,
 )
@@ -193,7 +195,10 @@ def load_manifest(
         "path",
         "blob_container_name",
     ]
-    print(f"  Loading {len(stg_rows)} rows → manifest_member_list …")
+    print(
+        f"  Loading {len(stg_rows)} rows → manifest_member_list "
+        f"in batches of {BATCH_SIZE} …"
+    )
 
     with conn.cursor() as cur:
         cur.execute(
@@ -205,55 +210,56 @@ def load_manifest(
                 external_member_id TEXT,
                 path TEXT,
                 blob_container_name TEXT
-            ) ON COMMIT DROP
+            ) ON COMMIT DELETE ROWS
             """
         )
-        copy_rows(cur, "stg_manifest", headers, stg_rows)
-
-        cur.execute(
-            """
-            INSERT INTO chart_list
-                (chart_name, page_count, status, path, blob_container_name)
-            SELECT DISTINCT
-                s.record_id, 0, 'received',
-                NULLIF(s.path, ''), NULLIF(s.blob_container_name, '')
-            FROM stg_manifest s
-            WHERE NOT EXISTS (
-                SELECT 1 FROM chart_list c WHERE c.chart_name = s.record_id
-            )
-            """
-        )
-        cur.execute(
-            """
-            DELETE FROM manifest_member_list m
-             WHERE m.chart_id IN (
-                SELECT DISTINCT c.id
+        loaded = 0
+        for batch_i, batch_n, batch in iter_batches(stg_rows):
+            copy_rows(cur, "stg_manifest", headers, batch)
+            cur.execute(
+                """
+                INSERT INTO chart_list
+                    (chart_name, page_count, status, path, blob_container_name)
+                SELECT DISTINCT
+                    s.record_id, 0, 'received',
+                    NULLIF(s.path, ''), NULLIF(s.blob_container_name, '')
                 FROM stg_manifest s
-                JOIN chart_list c ON c.chart_name = s.record_id
-             )
-            """
-        )
-        cur.execute(
-            """
-            INSERT INTO manifest_member_list
-                (chart_id, member_name, member_dob, external_member_id)
-            SELECT
-                c.id,
-                s.member_name,
-                NULLIF(s.member_dob, '')::DATE,
-                NULLIF(s.external_member_id, '')
-            FROM stg_manifest s
-            JOIN (
-                SELECT DISTINCT ON (chart_name) id, chart_name
-                FROM chart_list
-                ORDER BY chart_name, id
-            ) c ON c.chart_name = s.record_id
-            """
-        )
-        cur.execute("SELECT COUNT(*) FROM stg_manifest")
-        n = int(cur.fetchone()[0])
-    conn.commit()
-    print(f"  Done — {n} manifest rows loaded")
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM chart_list c WHERE c.chart_name = s.record_id
+                )
+                """
+            )
+            cur.execute(
+                """
+                DELETE FROM manifest_member_list m
+                 WHERE m.chart_id IN (
+                    SELECT DISTINCT c.id
+                    FROM stg_manifest s
+                    JOIN chart_list c ON c.chart_name = s.record_id
+                 )
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO manifest_member_list
+                    (chart_id, member_name, member_dob, external_member_id)
+                SELECT
+                    c.id,
+                    s.member_name,
+                    NULLIF(s.member_dob, '')::DATE,
+                    NULLIF(s.external_member_id, '')
+                FROM stg_manifest s
+                JOIN (
+                    SELECT DISTINCT ON (chart_name) id, chart_name
+                    FROM chart_list
+                    ORDER BY chart_name, id
+                ) c ON c.chart_name = s.record_id
+                """
+            )
+            loaded += len(batch)
+            conn.commit()
+            print(f"  manifest batch {batch_i}/{batch_n}: {len(batch)} rows")
+    print(f"  Done — {loaded} manifest rows loaded")
 
 
 def load_dos(conn: object, pipeline_root: Path) -> None:
@@ -310,8 +316,12 @@ def load_dos(conn: object, pipeline_root: Path) -> None:
         "doc_dos_to",
         "confidence",
     ]
-    print(f"  Loading {len(stg_rows)} rows → dos_extraction_results …")
+    print(
+        f"  Loading {len(stg_rows)} rows → dos_extraction_results "
+        f"in batches of {BATCH_SIZE} …"
+    )
 
+    inserted = unmatched = 0
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -324,72 +334,74 @@ def load_dos(conn: object, pipeline_root: Path) -> None:
                 doc_dos_from TEXT,
                 doc_dos_to TEXT,
                 confidence TEXT
-            ) ON COMMIT DROP
+            ) ON COMMIT DELETE ROWS
             """
         )
-        copy_rows(cur, "stg_dos", headers, stg_rows)
-
-        cur.execute(
-            """
-            CREATE TEMP TABLE stg_dos_resolved ON COMMIT DROP AS
-            SELECT
-                c.id AS chart_id,
-                p.id AS page_id,
-                NULLIF(s.dos_from, '')::DATE AS dos_from,
-                NULLIF(s.dos_to, '')::DATE AS dos_to,
-                NULLIF(s.doc_dos_from, '')::DATE AS doc_dos_from,
-                NULLIF(s.doc_dos_to, '')::DATE AS doc_dos_to,
-                NULLIF(s.confidence, '')::NUMERIC(5,4) AS confidence
-            FROM stg_dos s
-            JOIN LATERAL (
-                SELECT id
-                FROM chart_list
-                WHERE chart_name = s.chart_name
-                   OR chart_name LIKE s.chart_name || '_%'
-                   OR s.chart_name LIKE chart_name || '_%'
-                ORDER BY CASE WHEN chart_name = s.chart_name THEN 0 ELSE 1 END, id
-                LIMIT 1
-            ) c ON TRUE
-            JOIN LATERAL (
-                SELECT id
-                FROM page_list
-                WHERE chart_id = c.id
-                  AND (
-                    page_name = s.page_name
-                    OR page_name = regexp_replace(s.page_name, '^.*/', '')
-                    OR (
-                        s.page_number ~ '^[0-9]+$'
-                        AND regexp_replace(page_name, '\\.[^.]+$', '') = s.page_number
-                    )
-                  )
-                ORDER BY id
-                LIMIT 1
-            ) p ON TRUE
-            """
-        )
-        cur.execute(
-            """
-            DELETE FROM dos_extraction_results d
-             WHERE d.page_id IN (SELECT DISTINCT page_id FROM stg_dos_resolved)
-            """
-        )
-        cur.execute(
-            """
-            INSERT INTO dos_extraction_results (
-                chart_id, page_id, dos_from, dos_to,
-                doc_dos_from, doc_dos_to, confidence
+        for batch_i, batch_n, batch in iter_batches(stg_rows):
+            copy_rows(cur, "stg_dos", headers, batch)
+            cur.execute("DROP TABLE IF EXISTS stg_dos_resolved")
+            cur.execute(
+                """
+                CREATE TEMP TABLE stg_dos_resolved ON COMMIT DROP AS
+                SELECT
+                    c.id AS chart_id,
+                    p.id AS page_id,
+                    NULLIF(s.dos_from, '')::DATE AS dos_from,
+                    NULLIF(s.dos_to, '')::DATE AS dos_to,
+                    NULLIF(s.doc_dos_from, '')::DATE AS doc_dos_from,
+                    NULLIF(s.doc_dos_to, '')::DATE AS doc_dos_to,
+                    NULLIF(s.confidence, '')::NUMERIC(5,4) AS confidence
+                FROM stg_dos s
+                JOIN LATERAL (
+                    SELECT id
+                    FROM chart_list
+                    WHERE chart_name = s.chart_name
+                       OR chart_name LIKE s.chart_name || '_%'
+                       OR s.chart_name LIKE chart_name || '_%'
+                    ORDER BY CASE WHEN chart_name = s.chart_name THEN 0 ELSE 1 END, id
+                    LIMIT 1
+                ) c ON TRUE
+                JOIN LATERAL (
+                    SELECT id
+                    FROM page_list
+                    WHERE chart_id = c.id
+                      AND (
+                        page_name = s.page_name
+                        OR page_name = regexp_replace(s.page_name, '^.*/', '')
+                        OR (
+                            s.page_number ~ '^[0-9]+$'
+                            AND regexp_replace(page_name, '\\.[^.]+$', '') = s.page_number
+                        )
+                      )
+                    ORDER BY id
+                    LIMIT 1
+                ) p ON TRUE
+                """
             )
-            SELECT chart_id, page_id, dos_from, dos_to,
-                   doc_dos_from, doc_dos_to, confidence
-            FROM stg_dos_resolved
-            """
-        )
-        cur.execute("SELECT COUNT(*) FROM stg_dos_resolved")
-        n = int(cur.fetchone()[0])
-        cur.execute("SELECT COUNT(*) FROM stg_dos")
-        total = int(cur.fetchone()[0])
-    conn.commit()
-    print(f"  Done — inserted={n} (unmatched={total - n})")
+            cur.execute(
+                """
+                DELETE FROM dos_extraction_results d
+                 WHERE d.page_id IN (SELECT DISTINCT page_id FROM stg_dos_resolved)
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO dos_extraction_results (
+                    chart_id, page_id, dos_from, dos_to,
+                    doc_dos_from, doc_dos_to, confidence
+                )
+                SELECT chart_id, page_id, dos_from, dos_to,
+                       doc_dos_from, doc_dos_to, confidence
+                FROM stg_dos_resolved
+                """
+            )
+            cur.execute("SELECT COUNT(*) FROM stg_dos_resolved")
+            n = int(cur.fetchone()[0])
+            inserted += n
+            unmatched += len(batch) - n
+            conn.commit()
+            print(f"  DOS batch {batch_i}/{batch_n}: {len(batch)} rows (matched={n})")
+    print(f"  Done — inserted={inserted} (unmatched={unmatched})")
 
 
 def load_quality(conn: object, pipeline_root: Path) -> None:
@@ -481,7 +493,8 @@ def load_quality(conn: object, pipeline_root: Path) -> None:
         )
 
     print(
-        f"  Loading HW={len(stg_hw)} rotation={len(stg_rot)} → ocr_quality_results …"
+        f"  Loading HW={len(stg_hw)} rotation={len(stg_rot)} → ocr_quality_results "
+        f"(batch size {BATCH_SIZE}) …"
     )
 
     with conn.cursor() as cur:
