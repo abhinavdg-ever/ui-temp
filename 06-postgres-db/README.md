@@ -1,113 +1,80 @@
 # Postgres DB pack (abridged imaging schema)
 
-## Layouts
-
-**Monorepo (this repo / AI Project POC):**
+## Layout
 
 ```
-…
-  02-imaging-pipeline/dos-extraction/   ← DOS CSV producer
-  05-imaging-ui/                        ← UI app + .env + data/folders
-  06-postgres-db/                       ← this pack
-    ddl-scripts/
-    manifest/metadata_R1_B1.csv
-    db-insert-scripts/load_from_folders.py
+05-imaging-ui/
+  data/
+    folders/     ← chart page images + ocr/
+    pipeline/    ← imaging CSVs (+ chart_list.csv / page_list.csv from loader)
+    metadata/    ← metadata_R*_B*.csv (Manifest)
+  .env           ← DATABASE_URL, DATA_ROOT, PIPELINE_ROOT, METADATA_ROOT
+06-postgres-db/
+  ddl-scripts/
+  db-insert-scripts/
+    load_chart_info.py   ← folders → pipeline chart/page CSVs → Postgres
+    load_pipeline.py     ← metadata + pipeline CSVs → Postgres
+    test_db_connection.py
+    db_common.py
 ```
 
-The insert script auto-detects this layout and loads `DATABASE_URL` from `05-imaging-ui/.env` when present.
+## Scripts
 
-## DATA_MODE
+```bash
+cd 06-postgres-db/db-insert-scripts
+pip install -r requirements.txt
+
+python test_db_connection.py   # optional connectivity check
+
+# 1) Scan data/folders → write/append data/pipeline/chart_list.csv + page_list.csv → upsert DB
+python load_chart_info.py
+
+# 2) Load CSVs from data/metadata + data/pipeline into DB tables
+python load_pipeline.py
+```
+
+| Script | Reads | Writes |
+|--------|-------|--------|
+| `load_chart_info.py` | `data/folders/<chart>/pages` | `data/pipeline/chart_list.csv`, `page_list.csv` → `chart_list`, `page_list` |
+| `load_pipeline.py` | `data/metadata/metadata_R*_B*.csv`, `data/pipeline/*.csv` | `manifest_member_list`, `dos_extraction_results`, `ocr_quality_results` |
+
+`load_chart_info` **skips** a folder when it already exists in `chart_list.csv` with the **same page_count**.
+
+## DATA_MODE (UI)
 
 | Mode | Manifest | OCR |
 |------|----------|-----|
-| `local` | `06-postgres-db/manifest` | Local `ocr/` files |
+| `local` | `data/metadata` | Local `ocr/` files |
 | `postgres` | `manifest_member_list` | `ocr_results` |
 
-## What gets written to Postgres
-
-| Table | Source | Writer |
-|-------|--------|--------|
-| `chart_list` / `page_list` | `05-imaging-ui/data/folders/<chart>/pages` | `db-insert-scripts/load_from_folders.py` |
-| `manifest_member_list` | `06-postgres-db/manifest/metadata_R*_B*.csv` | `load_from_folders.py` |
-| `ocr_results` | `ocr/*_prelim` / `*_final1` / `*_final2` | `load_from_folders.py` |
-| **`dos_extraction_results`** | **`05-imaging-ui/data/pipeline/dos_extraction.csv`** | `load_dos_csv.py` (skip if missing) |
-| **`ocr_quality_results`** | **`data/pipeline/hw_printed_classification.csv` + `rotation_orientation.csv`** | `load_quality_csvs.py` (skip if missing) |
-
-## Pipeline CSV drop folder
-
-Put imaging exports in **`05-imaging-ui/data/pipeline/`** (see that folder’s README):
-
-| CSV | Loader / consumer |
-|-----|-------------------|
-| `hw_printed_classification.csv` (or `hw_printed.csv`) | `load_quality_csvs.py` + UI |
-| `rotation_orientation.csv` (or `rotation.csv`) | `load_quality_csvs.py` + UI |
-| `dos_extraction.csv` | `load_dos_csv.py` + UI |
-| `member_extraction_results.csv` | UI only (for now) |
-| `member_verification_summary.csv` | UI only (for now) |
-
-## `dos_extraction_results` ← DOS CSV
-
-**Prerequisite:** run `load_from_folders.py` first so `chart_list` / `page_list` rows exist.
-
-**Flow:**
-
-1. `load_from_folders.py` → charts, pages, manifest, OCR  
-2. Copy pipeline CSVs into `05-imaging-ui/data/pipeline/`  
-3. `load_dos_csv.py` → `dos_extraction_results`  
-4. `load_quality_csvs.py` → `ocr_quality_results` (HW + rotation)
-
-```bat
-cd 06-postgres-db\db-insert-scripts
-python load_from_folders.py
-python load_dos_csv.py
-python load_quality_csvs.py
-```
-
-## Quick start (Windows monorepo)
-
-```bat
-cd "c:\Projects\AI Project POC\06-postgres-db\db-insert-scripts"
-pip install -r requirements.txt
-
-REM Insert charts / pages / manifest / OCR (tables already created):
-python load_from_folders.py
-
-REM After CSVs are in 05-imaging-ui\data\pipeline\:
-python load_dos_csv.py
-python load_quality_csvs.py
-```
-
-Uses `DATABASE_URL` from `05-imaging-ui\.env`:
+## Env (`05-imaging-ui/.env`)
 
 ```
-postgresql+psycopg://aiuser:…@172.20.4.170:5432/imaging_outputs
+DATA_ROOT=./data/folders
+PIPELINE_ROOT=./data/pipeline
+METADATA_ROOT=./data/metadata
+DATABASE_URL=postgresql+psycopg://aiuser:…@172.20.4.170:5432/imaging_outputs
+DB_SCHEMA=public
 ```
 
-- **Database** name: `imaging_outputs`
-- **Schema**: `public` (`DB_SCHEMA=public`, default)
-- Tables: `chart_list`, `page_list`, `manifest_member_list`, `ocr_results`, `ocr_quality_results`, `dos_extraction_results`
+## Pipeline CSV drop (`data/pipeline/`)
 
-Loaders set `search_path` to `public` and upsert charts **without** `ON CONFLICT (chart_name)`.
+| CSV | Table / consumer |
+|-----|------------------|
+| `chart_list.csv` / `page_list.csv` | written by `load_chart_info` |
+| `dos_extraction.csv` | `dos_extraction_results` |
+| `hw_printed_classification.csv` (or `hw_printed.csv`) | `ocr_quality_results` + UI |
+| `rotation_orientation.csv` (or `rotation.csv`) | `ocr_quality_results` + UI |
+| `member_*` / `junk_*` | UI overlays only |
 
-### Postgres permission errors
+## Metadata (`data/metadata/`)
 
-If you see `permission denied for table chart_list`, the **user in `DATABASE_URL`** (usually `aiuser`)
-lacks grants on `public` tables:
+`metadata_R1_B1.csv` (and other `metadata_R*_B*.csv`) → `manifest_member_list` via `load_pipeline.py`.
+
+## Permissions
 
 ```sql
 GRANT USAGE ON SCHEMA public TO aiuser;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO aiuser;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO aiuser;
 ```
-
-## OCR mapping
-
-| File / stage | `ocr_type` | UI kind |
-|--------------|------------|---------|
-| prelim (Tess) | `tesseract` | `preliminary` |
-| final1 | `docling` | `final1` |
-| final2 | `azuredocintel` | `final2` |
-
-## Not loaded to Postgres yet
-
-- `member_extraction_results` / `member_verification_summary` (UI reads from `data/pipeline` only)

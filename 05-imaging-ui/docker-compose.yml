@@ -9,9 +9,7 @@ services:
     environment:
       DATA_MODE: ${DATA_MODE:-local}
       DATA_ROOT: /data/folders
-      # Local-mode Manifest Details: same drop folder as pipeline CSVs
-      METADATA_ROOT: ${METADATA_ROOT:-/data/pipeline}
-      # Drop pipeline CSVs here (flat filenames or mirrored pack paths)
+      METADATA_ROOT: ${METADATA_ROOT:-/data/metadata}
       PIPELINE_ROOT: /data/pipeline
       MONOREPO_ROOT: /data/pipeline
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://127.0.0.1:3001,http://localhost:3001}
@@ -30,8 +28,7 @@ services:
     volumes:
       - ${DATA_HOST_PATH:-./data/folders}:/data/folders:ro
       - ${PIPELINE_HOST_PATH:-./data/pipeline}:/data/pipeline:ro
-      # Optional legacy override if METADATA_ROOT points elsewhere
-      - ${METADATA_HOST_PATH:-./data/pipeline}:/data/manifest:ro
+      - ${METADATA_HOST_PATH:-./data/metadata}:/data/metadata:ro
     restart: unless-stopped
 
   frontend:

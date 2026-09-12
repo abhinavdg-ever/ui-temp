@@ -17,8 +17,7 @@ class Settings(BaseSettings):
     data_mode: Literal["local", "postgres"] = "local"
     data_root: str = "./data/folders"
     # Local mode: stacked metadata_R{n}_B{n}.csv for Manifest Details
-    # Prefer data/pipeline (same drop folder as imaging CSVs)
-    metadata_root: str = "./data/pipeline"
+    metadata_root: str = "./data/metadata"
     # Pipeline CSV drop folder (Docker: /data/pipeline). Copy pack outputs here.
     # Accepts flat files (dos_extraction.csv) or mirrored pack paths.
     pipeline_root: str = "./data/pipeline"
@@ -101,27 +100,29 @@ class Settings(BaseSettings):
 
     @property
     def resolved_metadata_root(self) -> Path:
-        """Local-mode Manifest CSVs: prefer data/pipeline, then 06-postgres-db/manifest."""
+        """Local-mode Manifest CSVs: prefer data/metadata."""
         path = Path(self.metadata_root)
         if not path.is_absolute():
             path = (ROOT_DIR / path).resolve()
 
         candidates: list[Path] = []
-        # Preferred: drop metadata_R*_B*.csv into the pipeline folder (or pipeline/manifest/)
-        pipeline = self.resolved_pipeline_root
-        candidates.extend([pipeline, pipeline / "manifest"])
+        # Preferred: 05-imaging-ui/data/metadata
+        meta = ROOT_DIR / "data" / "metadata"
+        candidates.append(meta)
         # Explicit METADATA_ROOT (.env / Docker)
+        candidates.append(path)
         if path.name.lower() == "metadata":
             candidates.append(path.parent / "manifest")
-        candidates.append(path)
         if path.name.lower() == "manifest":
             candidates.append(path.parent / "metadata")
+        # Legacy pack / docker mounts
         candidates.extend(
             [
                 ROOT_DIR / "postgres-db" / "manifest",
                 ROOT_DIR.parent / "06-postgres-db" / "manifest",
                 ROOT_DIR / "postgres-db" / "metadata",
                 ROOT_DIR.parent / "06-postgres-db" / "metadata",
+                Path("/data/metadata"),
                 Path("/data/manifest"),
             ]
         )
@@ -150,8 +151,7 @@ class Settings(BaseSettings):
         if with_csv:
             return with_csv[0]
         if empty_dirs:
-            # Prefer pipeline drop even when empty so new copies land in one place
-            for pref in (pipeline.resolve(), (pipeline / "manifest").resolve()):
+            for pref in (meta.resolve(), path.resolve()):
                 if pref in empty_dirs:
                     return pref
             return empty_dirs[0]

@@ -11,13 +11,13 @@ from __future__ import annotations
 import os
 import sys
 
-from load_from_folders import (
+from db_common import (
     bootstrap_env,
     configure_connection,
     db_schema,
     describe_dsn,
     psycopg_dsn,
-    _require_psycopg,
+    require_psycopg,
 )
 
 
@@ -35,7 +35,7 @@ def main() -> None:
     print(f"DATABASE_URL → {describe_dsn(url)}")
     print(f"DB_SCHEMA    → {db_schema()}")
 
-    psycopg = _require_psycopg()
+    psycopg = require_psycopg()
     try:
         with psycopg.connect(url, connect_timeout=10) as conn:
             schema = configure_connection(conn)
