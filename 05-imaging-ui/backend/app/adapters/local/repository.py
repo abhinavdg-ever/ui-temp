@@ -453,6 +453,7 @@ class LocalFolderRepository(FolderRepository):
 
         Streams (manifest not counted for status):
           hw | rotation | dos | member
+        Any CSV row naming the chart counts that stream (extracted values optional).
         Imaging Completed needs rotation + dos + member; hw only affects In Progress.
         """
         if self._pipeline_streams is not None and self._pipeline_pages is not None:
@@ -528,92 +529,31 @@ class LocalFolderRepository(FolderRepository):
                 keys.append(cid)
             return keys
 
-        def row_has_dos(row: dict[str, str]) -> bool:
-            for col in (
-                "dos_from",
-                "dos_to",
-                "dos_from_iso",
-                "dos_to_iso",
-                "dos",
-            ):
-                if (row.get(col) or "").strip():
-                    return True
-            return False
-
-        def row_has_hw(row: dict[str, str]) -> bool:
-            label = (
-                row.get("handwritten")
-                or row.get("handwritten_or_printed")
-                or row.get("type")
-                or ""
-            ).strip()
-            return bool(label) and label.upper() != "N/A"
-
-        def row_has_rotation(row: dict[str, str]) -> bool:
-            for col in (
-                "rotation_deg",
-                "rotation_degree",
-                "rotation_di",
-                "orientation_angle",
-                "rotation",
-                "tilt_angle",
-                "tilt_angle_c",
-                "tilt_angle_deg",
-                "mirrored",
-            ):
-                if (row.get(col) or "").strip():
-                    return True
-            return False
-
-        def row_has_member_extraction(row: dict[str, str]) -> bool:
-            for col in (
-                "extracted_name",
-                "extracted_dob",
-                "provided_member_id",
-                "confidence",
-            ):
-                if (row.get(col) or "").strip():
-                    return True
-            return False
-
-        def row_has_verification(row: dict[str, str]) -> bool:
-            status = (row.get("final_status") or row.get("status") or "").strip()
-            reason = (row.get("decision_reason") or "").strip()
-            conf = (row.get("confidence") or row.get("matched_confidence") or "").strip()
-            return bool(status or reason or conf)
-
         streams: dict[str, set[str]] = {}
         pages: dict[str, set[int]] = {}
 
         def mark(stream: str, keys: list[str], page_num: int | None) -> None:
+            if not keys:
+                return
             for key in keys:
                 streams.setdefault(key, set()).add(stream)
                 if page_num is not None:
                     pages.setdefault(key, set()).add(page_num)
 
+        # Status: any CSV row naming the chart counts — extracted values optional.
         for row in read_csv_rows(paths["hw"]):
-            if not row_has_hw(row):
-                continue
             mark("hw", chart_keys(row), page_num_from_row(row))
 
         for row in read_csv_rows(paths["rotation"]):
-            if not row_has_rotation(row):
-                continue
             mark("rotation", chart_keys(row), page_num_from_row(row))
 
         for row in read_csv_rows(paths["dos"]):
-            if not row_has_dos(row):
-                continue
             mark("dos", chart_keys(row), page_num_from_row(row))
 
         for row in read_csv_rows(paths["member_extraction"]):
-            if not row_has_member_extraction(row):
-                continue
             mark("member", chart_keys(row), page_num_from_row(row))
 
         for row in read_csv_rows(paths["member_verification"]):
-            if not row_has_verification(row):
-                continue
             mark("member", chart_keys(row), None)
 
         # Per-chart overrides under data/folders/*/imaging/
@@ -632,24 +572,19 @@ class LocalFolderRepository(FolderRepository):
                     name = path.name.lower()
                     if name.endswith("_hw_printed.csv"):
                         for row in read_csv_rows(path):
-                            if row_has_hw(row):
-                                mark("hw", keys, page_num_from_row(row))
+                            mark("hw", keys, page_num_from_row(row))
                     elif name.endswith("_rotation.csv"):
                         for row in read_csv_rows(path):
-                            if row_has_rotation(row):
-                                mark("rotation", keys, page_num_from_row(row))
+                            mark("rotation", keys, page_num_from_row(row))
                     elif name.endswith("_dos.csv"):
                         for row in read_csv_rows(path):
-                            if row_has_dos(row):
-                                mark("dos", keys, page_num_from_row(row))
+                            mark("dos", keys, page_num_from_row(row))
                     elif name.endswith("_member_extraction.csv"):
                         for row in read_csv_rows(path):
-                            if row_has_member_extraction(row):
-                                mark("member", keys, page_num_from_row(row))
+                            mark("member", keys, page_num_from_row(row))
                     elif name.endswith("_member_verification.csv"):
                         for row in read_csv_rows(path):
-                            if row_has_verification(row):
-                                mark("member", keys, None)
+                            mark("member", keys, None)
 
         # Ensure prefix/full-id aliases share stream membership
         for key in list(streams.keys()):

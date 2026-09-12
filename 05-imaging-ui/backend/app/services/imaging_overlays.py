@@ -58,6 +58,26 @@ def monorepo_root_from_data(data_root: Path) -> Path:
     return data_root.parent.parent.parent
 
 
+def _csv_has_data_rows(path: Path) -> bool:
+    """True when file has at least one non-empty data row (not header-only)."""
+    try:
+        with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as f:
+            # Skip blank / AppleDouble noise; first non-empty line = header
+            header = None
+            for line in f:
+                if line.strip():
+                    header = line
+                    break
+            if header is None:
+                return False
+            for line in f:
+                if line.strip():
+                    return True
+    except OSError:
+        return False
+    return False
+
+
 def resolve_pipeline_csv(data_root: Path, *combined_rel: str) -> Path:
     """Locate a pipeline CSV: pack path, data/pipeline mirror, or flat filename drop."""
     filename = combined_rel[-1] if combined_rel else ""
@@ -101,11 +121,11 @@ def resolve_pipeline_csv(data_root: Path, *combined_rel: str) -> Path:
                 root / "output" / name,
                 root / name,
             ):
-                if candidate.is_file() and candidate.stat().st_size > 0:
+                if candidate.is_file() and _csv_has_data_rows(candidate):
                     return candidate
         # original pack path
         pack = root.joinpath(*combined_rel)
-        if pack.is_file() and pack.stat().st_size > 0:
+        if pack.is_file() and _csv_has_data_rows(pack):
             return pack
     return monorepo_root_from_data(data_root).joinpath(*combined_rel)
 
@@ -257,8 +277,8 @@ def overlay_fields(
 def index_dos_rows(rows: list[dict[str, str]], chart_name: str) -> dict[str, dict[str, Any]]:
     by_key: dict[str, dict[str, Any]] = {}
     for row in rows:
-        cname = (row.get("chart_name") or chart_name).strip()
-        if cname and cname != chart_name:
+        cname = (row.get("chart_name") or row.get("chart_id") or row.get("folder") or "").strip()
+        if cname and not _chart_row_matches(cname, chart_name):
             continue
         fields = dos_row_fields(row)
         _put_page_keys(by_key, row, fields)
