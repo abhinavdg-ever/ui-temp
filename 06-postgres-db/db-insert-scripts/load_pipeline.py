@@ -1,34 +1,30 @@
 #!/usr/bin/env python3
-"""Load CSVs from 05-imaging-ui/data into Postgres imaging tables.
+"""Load CSVs from 05-imaging-ui/data into Postgres (bulk COPY + set SQL).
 
-Reads:
   data/metadata/metadata_R*_B*.csv  → manifest_member_list
   data/pipeline/dos_extraction.csv  → dos_extraction_results
   data/pipeline/hw_printed*.csv     → ocr_quality_results
   data/pipeline/rotation*.csv       → ocr_quality_results
 
-Prerequisite: run load_chart_info.py first (chart_list / page_list).
+Prerequisite: load_chart_info.py (chart_list / page_list).
 
 Usage:
-  cd 06-postgres-db/db-insert-scripts
   python load_pipeline.py
   python load_pipeline.py --skip-manifest
-  python load_pipeline.py --skip-dos --skip-quality
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import io
 import os
 import sys
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from db_common import (
     METADATA_FILE_RE,
-    PG_PACK_ROOT,
     bootstrap_env,
     chart_blob_path,
     configure_connection,
@@ -68,126 +64,72 @@ def first_existing(dir_path: Path, names: tuple[str, ...]) -> Path | None:
     return None
 
 
-def parse_dob(raw: str) -> str | None:
+def parse_dob_iso(raw: str) -> str:
     raw = (raw or "").strip()
     if not raw:
-        return None
-    for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m-%d-%Y"):
+        return ""
+    for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m-%d-%Y", "%m/%d/%y", "%m-%d-%y"):
         try:
             return datetime.strptime(raw, fmt).date().isoformat()
         except ValueError:
             continue
-    return None
+    return ""
 
 
-def parse_date(raw: str | None) -> date | None:
+def parse_date_iso(raw: str | None) -> str:
     value = (raw or "").strip()
     if not value or value.lower() in {"unknown", "null", "none"}:
-        return None
-    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y", "%m/%d/%y", "%m-%d-%y"):
-        try:
-            return datetime.strptime(value, fmt).date()
-        except ValueError:
-            continue
-    iso = parse_dob(value)
-    return date.fromisoformat(iso) if iso else None
+        return ""
+    return parse_dob_iso(value)
 
 
-def parse_confidence(raw: str | None) -> float | None:
+def parse_confidence_str(raw: str | None) -> str:
     value = (raw or "").strip()
     if not value:
-        return None
+        return ""
     try:
         val = float(value)
     except ValueError:
-        return None
+        return ""
     if val > 1:
         val = val / 100.0
-    return round(val, 4)
+    return f"{round(val, 4)}"
 
 
-def parse_float(raw: str | None) -> float | None:
+def parse_float_str(raw: str | None) -> str:
     value = (raw or "").strip()
     if not value or value.upper() in {"N/A", "NULL", "NONE"}:
-        return None
+        return ""
     try:
-        return float(value)
+        return str(float(value))
     except ValueError:
-        return None
+        return ""
 
 
-def parse_bool(raw: str | None) -> bool | None:
+def parse_bool_str(raw: str | None) -> str:
     value = (raw or "").strip().lower()
-    if not value:
-        return None
     if value in {"1", "true", "t", "yes", "y", "mirrored"}:
-        return True
+        return "true"
     if value in {"0", "false", "f", "no", "n", "not mirrored", "not_mirrored"}:
-        return False
-    return None
+        return "false"
+    return ""
 
 
-def load_chart_page_maps(
-    cur: object,
-) -> tuple[dict[str, int], dict[tuple[str, str], int], dict[tuple[str, int], int]]:
-    cur.execute("SELECT id, chart_name FROM chart_list")
-    charts = {str(name): int(cid) for cid, name in cur.fetchall()}
-    cur.execute(
-        """
-        SELECT c.chart_name, p.id, p.page_name
-        FROM page_list p
-        JOIN chart_list c ON c.id = p.chart_id
-        """
-    )
-    by_name: dict[tuple[str, str], int] = {}
-    by_num: dict[tuple[str, int], int] = {}
-    for chart_name, page_id, page_name in cur.fetchall():
-        cname = str(chart_name)
-        pname = str(page_name)
-        by_name[(cname, pname)] = int(page_id)
-        stem = Path(pname).stem
-        if stem.isdigit():
-            by_num[(cname, int(stem))] = int(page_id)
-    return charts, by_name, by_num
-
-
-def resolve_page_id(
-    chart_name: str,
-    row: dict[str, str],
-    by_name: dict[tuple[str, str], int],
-    by_num: dict[tuple[str, int], int],
-) -> int | None:
-    page_name = (
-        row.get("page_name") or row.get("filename") or row.get("page") or ""
-    ).strip()
-    if page_name:
-        pid = by_name.get((chart_name, page_name)) or by_name.get(
-            (chart_name, Path(page_name).name)
-        )
-        if pid is not None:
-            return pid
-    raw_num = (row.get("page_number") or row.get("page_num") or "").strip()
-    if raw_num.isdigit():
-        return by_num.get((chart_name, int(raw_num)))
-    if page_name:
-        stem = Path(page_name).stem
-        if stem.isdigit():
-            return by_num.get((chart_name, int(stem)))
-    return None
-
-
-def match_chart(charts: dict[str, int], name: str) -> str | None:
-    if not name:
-        return None
-    if name in charts:
-        return name
-    for cname in charts:
-        if cname.startswith(name + "_") or name.startswith(cname + "_"):
-            return cname
-    return None
-
-
-# ----- manifest -----
+def copy_rows(cur: object, table: str, headers: list[str], rows: list[dict[str, str]]) -> None:
+    if not rows:
+        return
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=headers, extrasaction="ignore", lineterminator="\n")
+    for row in rows:
+        writer.writerow({h: row.get(h, "") for h in headers})
+    buf.seek(0)
+    cols = ", ".join(headers)
+    with cur.copy(f"COPY {table} ({cols}) FROM STDIN WITH (FORMAT csv)") as copy:
+        while True:
+            chunk = buf.read(1024 * 1024)
+            if not chunk:
+                break
+            copy.write(chunk)
 
 
 def discover_metadata_csvs(metadata_dir: Path) -> list[Path]:
@@ -214,166 +156,333 @@ def load_manifest(
 ) -> None:
     sources = discover_metadata_csvs(metadata_dir)
     if not sources:
-        print(f"  No metadata_R*_B*.csv in {metadata_dir} — skip manifest")
+        print(f"  No metadata_R*_B*.csv in {metadata_dir} — skip")
         return
 
-    stacked: list[dict[str, str]] = []
+    stg_rows: list[dict[str, str]] = []
     for path in sources:
         rows = read_csv_rows(path)
-        print(f"  metadata {path.name}: {len(rows)} rows")
-        stacked.extend(r for r in rows if r.get("recordId"))
+        print(f"  read {path.name}: {len(rows)} rows")
+        for row in rows:
+            record_id = (row.get("recordId") or "").strip()
+            if not record_id:
+                continue
+            name = f"{row.get('DummyFirstName', '')} {row.get('DummyLastName', '')}".strip()
+            if not name:
+                continue
+            stg_rows.append(
+                {
+                    "record_id": record_id,
+                    "member_name": name,
+                    "member_dob": parse_dob_iso(row.get("DummyDOB", "")),
+                    "external_member_id": (row.get("MemberID") or "").strip(),
+                    "path": chart_blob_path(path_template, record_id),
+                    "blob_container_name": container_name or "",
+                }
+            )
 
-    by_record: dict[str, list[dict[str, str]]] = {}
-    for row in stacked:
-        by_record.setdefault(row["recordId"], []).append(row)
+    if not stg_rows:
+        print("  No usable manifest rows — skip")
+        return
+
+    headers = [
+        "record_id",
+        "member_name",
+        "member_dob",
+        "external_member_id",
+        "path",
+        "blob_container_name",
+    ]
+    print(f"  Loading {len(stg_rows)} rows → manifest_member_list …")
 
     with conn.cursor() as cur:
-        for record_id, rows in sorted(by_record.items()):
-            chart_path = chart_blob_path(path_template, record_id)
-            cur.execute(
-                "SELECT id FROM chart_list WHERE chart_name = %s ORDER BY id LIMIT 1",
-                (record_id,),
-            )
-            crow = cur.fetchone()
-            if crow:
-                chart_id = int(crow[0])
-            else:
-                cur.execute(
-                    """
-                    INSERT INTO chart_list
-                        (chart_name, page_count, status, path, blob_container_name)
-                    VALUES (%s, 0, 'received', %s, %s)
-                    RETURNING id
-                    """,
-                    (record_id, chart_path, container_name or None),
-                )
-                chart_id = int(cur.fetchone()[0])
+        cur.execute(
+            """
+            CREATE TEMP TABLE stg_manifest (
+                record_id TEXT,
+                member_name TEXT,
+                member_dob TEXT,
+                external_member_id TEXT,
+                path TEXT,
+                blob_container_name TEXT
+            ) ON COMMIT DROP
+            """
+        )
+        copy_rows(cur, "stg_manifest", headers, stg_rows)
 
-            cur.execute(
-                "DELETE FROM manifest_member_list WHERE chart_id = %s", (chart_id,)
+        cur.execute(
+            """
+            INSERT INTO chart_list
+                (chart_name, page_count, status, path, blob_container_name)
+            SELECT DISTINCT
+                s.record_id, 0, 'received',
+                NULLIF(s.path, ''), NULLIF(s.blob_container_name, '')
+            FROM stg_manifest s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM chart_list c WHERE c.chart_name = s.record_id
             )
-            n = 0
-            for row in rows:
-                name = f"{row.get('DummyFirstName', '')} {row.get('DummyLastName', '')}".strip()
-                if not name:
-                    continue
-                cur.execute(
-                    """
-                    INSERT INTO manifest_member_list
-                        (chart_id, member_name, member_dob, external_member_id)
-                    VALUES (%s, %s, %s, %s)
-                    """,
-                    (
-                        chart_id,
-                        name,
-                        parse_dob(row.get("DummyDOB", "")),
-                        row.get("MemberID") or None,
-                    ),
-                )
-                n += 1
-            print(f"  {record_id}: chart_id={chart_id} manifest={n}")
+            """
+        )
+        cur.execute(
+            """
+            DELETE FROM manifest_member_list m
+             WHERE m.chart_id IN (
+                SELECT DISTINCT c.id
+                FROM stg_manifest s
+                JOIN chart_list c ON c.chart_name = s.record_id
+             )
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO manifest_member_list
+                (chart_id, member_name, member_dob, external_member_id)
+            SELECT
+                c.id,
+                s.member_name,
+                NULLIF(s.member_dob, '')::DATE,
+                NULLIF(s.external_member_id, '')
+            FROM stg_manifest s
+            JOIN (
+                SELECT DISTINCT ON (chart_name) id, chart_name
+                FROM chart_list
+                ORDER BY chart_name, id
+            ) c ON c.chart_name = s.record_id
+            """
+        )
+        cur.execute("SELECT COUNT(*) FROM stg_manifest")
+        n = int(cur.fetchone()[0])
     conn.commit()
-    print(f"  → manifest_member_list ({len(by_record)} charts)")
-
-
-# ----- DOS -----
+    print(f"  Done — {n} manifest rows loaded")
 
 
 def load_dos(conn: object, pipeline_root: Path) -> None:
     path = first_existing(pipeline_root, DOS_NAMES)
     if path is None:
-        print(f"  No {DOS_NAMES[0]} in {pipeline_root} — skip DOS")
+        print(f"  No {DOS_NAMES[0]} — skip")
         return
-    rows = read_csv_rows(path)
-    print(f"  read {len(rows)} DOS rows from {path.name}")
-    if not rows:
+    raw_rows = read_csv_rows(path)
+    print(f"  read {path.name}: {len(raw_rows)} rows")
+    if not raw_rows:
         return
 
-    inserted = skip_chart = skip_page = 0
+    stg_rows: list[dict[str, str]] = []
+    for row in raw_rows:
+        chart = (row.get("chart_name") or "").strip()
+        if not chart:
+            continue
+        dos_from = parse_date_iso(
+            row.get("dos_from_iso") or row.get("dos_from") or row.get("dos")
+        )
+        dos_to = parse_date_iso(row.get("dos_to_iso") or row.get("dos_to") or "")
+        if dos_from and not dos_to and (
+            row.get("dos_from") or row.get("dos_from_iso") or row.get("dos")
+        ):
+            dos_to = dos_from
+        stg_rows.append(
+            {
+                "chart_name": chart,
+                "page_name": (
+                    row.get("page_name") or row.get("filename") or ""
+                ).strip(),
+                "page_number": (
+                    row.get("page_number") or row.get("page_num") or ""
+                ).strip(),
+                "dos_from": dos_from,
+                "dos_to": dos_to,
+                "doc_dos_from": parse_date_iso(
+                    row.get("doc_dos_from_iso") or row.get("doc_dos_from") or ""
+                ),
+                "doc_dos_to": parse_date_iso(
+                    row.get("doc_dos_to_iso") or row.get("doc_dos_to") or ""
+                ),
+                "confidence": parse_confidence_str(row.get("confidence")),
+            }
+        )
+
+    headers = [
+        "chart_name",
+        "page_name",
+        "page_number",
+        "dos_from",
+        "dos_to",
+        "doc_dos_from",
+        "doc_dos_to",
+        "confidence",
+    ]
+    print(f"  Loading {len(stg_rows)} rows → dos_extraction_results …")
+
     with conn.cursor() as cur:
-        charts, by_name, by_num = load_chart_page_maps(cur)
-        page_ids: set[int] = set()
-        prepared: list[tuple] = []
-        for row in rows:
-            chart_name = match_chart(
-                charts, (row.get("chart_name") or "").strip()
+        cur.execute(
+            """
+            CREATE TEMP TABLE stg_dos (
+                chart_name TEXT,
+                page_name TEXT,
+                page_number TEXT,
+                dos_from TEXT,
+                dos_to TEXT,
+                doc_dos_from TEXT,
+                doc_dos_to TEXT,
+                confidence TEXT
+            ) ON COMMIT DROP
+            """
+        )
+        copy_rows(cur, "stg_dos", headers, stg_rows)
+
+        cur.execute(
+            """
+            CREATE TEMP TABLE stg_dos_resolved ON COMMIT DROP AS
+            SELECT
+                c.id AS chart_id,
+                p.id AS page_id,
+                NULLIF(s.dos_from, '')::DATE AS dos_from,
+                NULLIF(s.dos_to, '')::DATE AS dos_to,
+                NULLIF(s.doc_dos_from, '')::DATE AS doc_dos_from,
+                NULLIF(s.doc_dos_to, '')::DATE AS doc_dos_to,
+                NULLIF(s.confidence, '')::NUMERIC(5,4) AS confidence
+            FROM stg_dos s
+            JOIN LATERAL (
+                SELECT id
+                FROM chart_list
+                WHERE chart_name = s.chart_name
+                   OR chart_name LIKE s.chart_name || '_%'
+                   OR s.chart_name LIKE chart_name || '_%'
+                ORDER BY CASE WHEN chart_name = s.chart_name THEN 0 ELSE 1 END, id
+                LIMIT 1
+            ) c ON TRUE
+            JOIN LATERAL (
+                SELECT id
+                FROM page_list
+                WHERE chart_id = c.id
+                  AND (
+                    page_name = s.page_name
+                    OR page_name = regexp_replace(s.page_name, '^.*/', '')
+                    OR (
+                        s.page_number ~ '^[0-9]+$'
+                        AND regexp_replace(page_name, '\\.[^.]+$', '') = s.page_number
+                    )
+                  )
+                ORDER BY id
+                LIMIT 1
+            ) p ON TRUE
+            """
+        )
+        cur.execute(
+            """
+            DELETE FROM dos_extraction_results d
+             WHERE d.page_id IN (SELECT DISTINCT page_id FROM stg_dos_resolved)
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO dos_extraction_results (
+                chart_id, page_id, dos_from, dos_to,
+                doc_dos_from, doc_dos_to, confidence
             )
-            if not chart_name:
-                skip_chart += 1
-                continue
-            page_id = resolve_page_id(chart_name, row, by_name, by_num)
-            if page_id is None:
-                skip_page += 1
-                continue
-            dos_from = parse_date(
-                row.get("dos_from_iso") or row.get("dos_from") or row.get("dos")
-            )
-            dos_to = parse_date(row.get("dos_to_iso") or row.get("dos_to") or "")
-            if dos_from and not dos_to and (
-                row.get("dos_from") or row.get("dos_from_iso") or row.get("dos")
-            ):
-                dos_to = dos_from
-            doc_from = parse_date(
-                row.get("doc_dos_from_iso") or row.get("doc_dos_from") or ""
-            )
-            doc_to = parse_date(
-                row.get("doc_dos_to_iso") or row.get("doc_dos_to") or ""
-            )
-            conf = parse_confidence(row.get("confidence"))
-            page_ids.add(page_id)
-            prepared.append(
-                (
-                    charts[chart_name],
-                    page_id,
-                    dos_from,
-                    dos_to,
-                    doc_from,
-                    doc_to,
-                    conf,
-                )
-            )
-        if page_ids:
-            cur.execute(
-                "DELETE FROM dos_extraction_results WHERE page_id = ANY(%s)",
-                (list(page_ids),),
-            )
-        for vals in prepared:
-            cur.execute(
-                """
-                INSERT INTO dos_extraction_results (
-                    chart_id, page_id, dos_from, dos_to,
-                    doc_dos_from, doc_dos_to, confidence
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """,
-                vals,
-            )
-            inserted += 1
+            SELECT chart_id, page_id, dos_from, dos_to,
+                   doc_dos_from, doc_dos_to, confidence
+            FROM stg_dos_resolved
+            """
+        )
+        cur.execute("SELECT COUNT(*) FROM stg_dos_resolved")
+        n = int(cur.fetchone()[0])
+        cur.execute("SELECT COUNT(*) FROM stg_dos")
+        total = int(cur.fetchone()[0])
     conn.commit()
-    print(
-        f"  → dos_extraction_results inserted={inserted} "
-        f"skip_chart={skip_chart} skip_page={skip_page}"
-    )
-
-
-# ----- quality (HW + rotation) -----
+    print(f"  Done — inserted={n} (unmatched={total - n})")
 
 
 def load_quality(conn: object, pipeline_root: Path) -> None:
     hw_path = first_existing(pipeline_root, HW_NAMES)
     rot_path = first_existing(pipeline_root, ROTATION_NAMES)
     if hw_path is None and rot_path is None:
-        print(f"  No HW/rotation CSVs in {pipeline_root} — skip quality")
+        print("  No HW/rotation CSVs — skip")
         return
 
     hw_rows = read_csv_rows(hw_path) if hw_path else []
     rot_rows = read_csv_rows(rot_path) if rot_path else []
     if hw_path:
-        print(f"  HW read {len(hw_rows)} from {hw_path.name}")
+        print(f"  read {hw_path.name}: {len(hw_rows)} rows")
     if rot_path:
-        print(f"  rotation read {len(rot_rows)} from {rot_path.name}")
+        print(f"  read {rot_path.name}: {len(rot_rows)} rows")
 
-    inserted = skip_chart = skip_page = 0
-    by_page: dict[int, dict[str, Any]] = {}
+    stg_hw: list[dict[str, str]] = []
+    for row in hw_rows:
+        chart = (
+            row.get("chart_name") or row.get("chart_id") or row.get("folder") or ""
+        ).strip()
+        label = (
+            row.get("handwritten")
+            or row.get("handwritten_or_printed")
+            or row.get("type")
+            or ""
+        ).strip()
+        if not chart or not label or label.upper() == "N/A":
+            continue
+        stg_hw.append(
+            {
+                "chart_name": chart,
+                "page_name": (
+                    row.get("page_name") or row.get("filename") or row.get("page") or ""
+                ).strip(),
+                "page_number": (
+                    row.get("page_number") or row.get("page_num") or ""
+                ).strip(),
+                "handwritten_label": label,
+                "handwritten_flag": "true" if "handwritten" in label.lower() else "false",
+                "handwritten_confidence": parse_confidence_str(row.get("confidence")),
+            }
+        )
+
+    stg_rot: list[dict[str, str]] = []
+    for row in rot_rows:
+        chart = (
+            row.get("folder") or row.get("chart_name") or row.get("chart_id") or ""
+        ).strip()
+        if not chart:
+            continue
+        rotation = parse_float_str(
+            row.get("rotation_deg")
+            or row.get("rotation_degree")
+            or row.get("rotation_di")
+            or row.get("orientation_angle")
+            or row.get("rotation")
+        )
+        tilt = parse_float_str(
+            row.get("tilt_angle_deg")
+            or row.get("tilt_angle")
+            or row.get("tilt_angle_c")
+            or row.get("tilt")
+        )
+        mirrored = parse_bool_str(row.get("mirrored"))
+        if not rotation and not tilt and not mirrored:
+            continue
+        orientation = ""
+        if rotation:
+            try:
+                r = float(rotation)
+                orientation = str(int(r)) if r.is_integer() else f"{r:g}"
+            except ValueError:
+                orientation = rotation
+        stg_rot.append(
+            {
+                "chart_name": chart,
+                "page_name": (
+                    row.get("page_name") or row.get("filename") or row.get("page") or ""
+                ).strip(),
+                "page_number": (
+                    row.get("page_number") or row.get("page_num") or ""
+                ).strip(),
+                "orientation": orientation,
+                "rotation_deg": rotation,
+                "tilt_angle": tilt,
+                "mirrored": mirrored,
+            }
+        )
+
+    print(
+        f"  Loading HW={len(stg_hw)} rotation={len(stg_rot)} → ocr_quality_results …"
+    )
 
     with conn.cursor() as cur:
         for sql in (
@@ -389,132 +498,197 @@ def load_quality(conn: object, pipeline_root: Path) -> None:
                 if "already exists" not in msg and "duplicate" not in msg:
                     raise
 
-        charts, by_name, by_num = load_chart_page_maps(cur)
+        cur.execute(
+            """
+            CREATE TEMP TABLE stg_hw (
+                chart_name TEXT,
+                page_name TEXT,
+                page_number TEXT,
+                handwritten_label TEXT,
+                handwritten_flag TEXT,
+                handwritten_confidence TEXT
+            ) ON COMMIT DROP
+            """
+        )
+        cur.execute(
+            """
+            CREATE TEMP TABLE stg_rot (
+                chart_name TEXT,
+                page_name TEXT,
+                page_number TEXT,
+                orientation TEXT,
+                rotation_deg TEXT,
+                tilt_angle TEXT,
+                mirrored TEXT
+            ) ON COMMIT DROP
+            """
+        )
+        copy_rows(
+            cur,
+            "stg_hw",
+            [
+                "chart_name",
+                "page_name",
+                "page_number",
+                "handwritten_label",
+                "handwritten_flag",
+                "handwritten_confidence",
+            ],
+            stg_hw,
+        )
+        copy_rows(
+            cur,
+            "stg_rot",
+            [
+                "chart_name",
+                "page_name",
+                "page_number",
+                "orientation",
+                "rotation_deg",
+                "tilt_angle",
+                "mirrored",
+            ],
+            stg_rot,
+        )
 
-        def resolve(row: dict[str, str], keys: tuple[str, ...]) -> tuple[int, int] | None:
-            nonlocal skip_chart, skip_page
-            raw = ""
-            for k in keys:
-                raw = (row.get(k) or "").strip()
-                if raw:
-                    break
-            chart_name = match_chart(charts, raw)
-            if not chart_name:
-                skip_chart += 1
-                return None
-            page_id = resolve_page_id(chart_name, row, by_name, by_num)
-            if page_id is None:
-                skip_page += 1
-                return None
-            return charts[chart_name], page_id
-
-        for row in hw_rows:
-            resolved = resolve(row, ("chart_name", "chart_id", "folder"))
-            if not resolved:
-                continue
-            chart_id, page_id = resolved
-            label = (
-                row.get("handwritten")
-                or row.get("handwritten_or_printed")
-                or row.get("type")
-                or ""
-            ).strip()
-            if not label or label.upper() == "N/A":
-                continue
-            bucket = by_page.setdefault(
-                page_id, {"chart_id": chart_id, "page_id": page_id, "handwritten_flag": False}
+        # Resolve pages once, merge HW + rotation by page_id
+        cur.execute(
+            """
+            CREATE TEMP TABLE stg_quality ON COMMIT DROP AS
+            WITH charts AS (
+                SELECT DISTINCT ON (chart_name) id, chart_name
+                FROM chart_list
+                ORDER BY chart_name, id
+            ),
+            hw AS (
+                SELECT
+                    c.id AS chart_id,
+                    p.id AS page_id,
+                    s.handwritten_label,
+                    s.handwritten_flag = 'true' AS handwritten_flag,
+                    NULLIF(s.handwritten_confidence, '')::NUMERIC(5,4)
+                        AS handwritten_confidence
+                FROM stg_hw s
+                JOIN LATERAL (
+                    SELECT id FROM chart_list
+                    WHERE chart_name = s.chart_name
+                       OR chart_name LIKE s.chart_name || '_%'
+                       OR s.chart_name LIKE chart_name || '_%'
+                    ORDER BY CASE WHEN chart_name = s.chart_name THEN 0 ELSE 1 END, id
+                    LIMIT 1
+                ) c ON TRUE
+                JOIN LATERAL (
+                    SELECT id FROM page_list
+                    WHERE chart_id = c.id
+                      AND (
+                        page_name = s.page_name
+                        OR page_name = regexp_replace(s.page_name, '^.*/', '')
+                        OR (
+                            s.page_number ~ '^[0-9]+$'
+                            AND regexp_replace(page_name, '\\.[^.]+$', '') = s.page_number
+                        )
+                      )
+                    ORDER BY id LIMIT 1
+                ) p ON TRUE
+            ),
+            rot AS (
+                SELECT
+                    c.id AS chart_id,
+                    p.id AS page_id,
+                    NULLIF(s.orientation, '') AS orientation,
+                    NULLIF(s.rotation_deg, '')::NUMERIC(8,2) AS rotation_deg,
+                    NULLIF(s.tilt_angle, '')::NUMERIC(6,2) AS tilt_angle,
+                    CASE
+                        WHEN s.mirrored = 'true' THEN TRUE
+                        WHEN s.mirrored = 'false' THEN FALSE
+                        ELSE NULL
+                    END AS mirrored
+                FROM stg_rot s
+                JOIN LATERAL (
+                    SELECT id FROM chart_list
+                    WHERE chart_name = s.chart_name
+                       OR chart_name LIKE s.chart_name || '_%'
+                       OR s.chart_name LIKE chart_name || '_%'
+                    ORDER BY CASE WHEN chart_name = s.chart_name THEN 0 ELSE 1 END, id
+                    LIMIT 1
+                ) c ON TRUE
+                JOIN LATERAL (
+                    SELECT id FROM page_list
+                    WHERE chart_id = c.id
+                      AND (
+                        page_name = s.page_name
+                        OR page_name = regexp_replace(s.page_name, '^.*/', '')
+                        OR (
+                            s.page_number ~ '^[0-9]+$'
+                            AND regexp_replace(page_name, '\\.[^.]+$', '') = s.page_number
+                        )
+                      )
+                    ORDER BY id LIMIT 1
+                ) p ON TRUE
+            ),
+            pages AS (
+                SELECT page_id, MAX(chart_id) AS chart_id FROM (
+                    SELECT page_id, chart_id FROM hw
+                    UNION ALL
+                    SELECT page_id, chart_id FROM rot
+                ) u
+                GROUP BY page_id
             )
-            bucket["handwritten_flag"] = "handwritten" in label.lower()
-            bucket["handwritten_label"] = label
-            bucket["handwritten_confidence"] = parse_confidence(row.get("confidence"))
-
-        for row in rot_rows:
-            resolved = resolve(row, ("folder", "chart_name", "chart_id"))
-            if not resolved:
-                continue
-            chart_id, page_id = resolved
-            rotation = parse_float(
-                row.get("rotation_deg")
-                or row.get("rotation_degree")
-                or row.get("rotation_di")
-                or row.get("orientation_angle")
-                or row.get("rotation")
+            SELECT
+                pages.chart_id,
+                pages.page_id,
+                COALESCE(hw.handwritten_flag, FALSE) AS handwritten_flag,
+                hw.handwritten_label,
+                hw.handwritten_confidence,
+                rot.orientation,
+                rot.rotation_deg,
+                rot.tilt_angle,
+                rot.mirrored
+            FROM pages
+            LEFT JOIN hw ON hw.page_id = pages.page_id
+            LEFT JOIN rot ON rot.page_id = pages.page_id
+            """
+        )
+        cur.execute(
+            """
+            DELETE FROM ocr_quality_results q
+             WHERE q.page_id IN (SELECT page_id FROM stg_quality)
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO ocr_quality_results (
+                chart_id, page_id, handwritten_flag, handwritten_label,
+                handwritten_confidence, orientation, rotation_deg,
+                tilt_angle, mirrored
             )
-            tilt = parse_float(
-                row.get("tilt_angle_deg")
-                or row.get("tilt_angle")
-                or row.get("tilt_angle_c")
-                or row.get("tilt")
-            )
-            mirrored = parse_bool(row.get("mirrored"))
-            if rotation is None and tilt is None and mirrored is None:
-                continue
-            bucket = by_page.setdefault(
-                page_id, {"chart_id": chart_id, "page_id": page_id, "handwritten_flag": False}
-            )
-            if rotation is not None:
-                bucket["orientation"] = (
-                    str(int(rotation)) if float(rotation).is_integer() else f"{rotation:g}"
-                )
-                bucket["rotation_deg"] = rotation
-            if tilt is not None:
-                bucket["tilt_angle"] = tilt
-            if mirrored is not None:
-                bucket["mirrored"] = mirrored
-
-        if by_page:
-            cur.execute(
-                "DELETE FROM ocr_quality_results WHERE page_id = ANY(%s)",
-                (list(by_page.keys()),),
-            )
-        for row in by_page.values():
-            cur.execute(
-                """
-                INSERT INTO ocr_quality_results (
-                    chart_id, page_id, handwritten_flag, handwritten_label,
-                    handwritten_confidence, orientation, rotation_deg,
-                    tilt_angle, mirrored
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    row["chart_id"],
-                    row["page_id"],
-                    bool(row.get("handwritten_flag", False)),
-                    row.get("handwritten_label"),
-                    row.get("handwritten_confidence"),
-                    row.get("orientation"),
-                    row.get("rotation_deg"),
-                    row.get("tilt_angle"),
-                    row.get("mirrored"),
-                ),
-            )
-            inserted += 1
+            SELECT
+                chart_id, page_id, handwritten_flag, handwritten_label,
+                handwritten_confidence, orientation, rotation_deg,
+                tilt_angle, mirrored
+            FROM stg_quality
+            """
+        )
+        cur.execute("SELECT COUNT(*) FROM stg_quality")
+        n = int(cur.fetchone()[0])
     conn.commit()
-    print(
-        f"  → ocr_quality_results inserted={inserted} "
-        f"skip_chart={skip_chart} skip_page={skip_page}"
-    )
+    print(f"  Done — inserted={n}")
 
 
 def main() -> None:
     ui_root = bootstrap_env()
     parser = argparse.ArgumentParser(
-        description="Load data/metadata + data/pipeline CSVs into Postgres"
+        description="Bulk-load metadata + pipeline CSVs into Postgres"
     )
     parser.add_argument("--database-url", default=os.environ.get("DATABASE_URL", ""))
     parser.add_argument(
-        "--pipeline-root",
-        type=Path,
-        default=default_pipeline_root(ui_root),
+        "--pipeline-root", type=Path, default=default_pipeline_root(ui_root)
     )
     parser.add_argument(
-        "--metadata-dir",
-        type=Path,
-        default=default_metadata_dir(ui_root),
+        "--metadata-dir", type=Path, default=default_metadata_dir(ui_root)
     )
     parser.add_argument(
-        "--container-name",
-        default=os.environ.get("BLOB_CONTAINER", ""),
+        "--container-name", default=os.environ.get("BLOB_CONTAINER", "")
     )
     parser.add_argument(
         "--path-template",
@@ -539,7 +713,6 @@ def main() -> None:
 
     if ui_root:
         print(f"imaging-ui: {ui_root}")
-    print(f"postgres-db pack: {PG_PACK_ROOT}")
     print(f"database: {describe_dsn(database_url)}")
     print(f"pipeline: {pipeline_root}")
     print(f"metadata: {metadata_dir}")
