@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""Two steps only:
+"""Two steps (+ optional OCR):
 
   1) Scan data/folders → write data/pipeline/chart_list.csv + page_list.csv
   2) Load those two CSVs into Postgres chart_list / page_list
+  3) Read data/folders/<chart>/ocr/* → ocr_results (raw text)
 
 Append rules for step 1:
   - Chart already in CSV with same page_count → skip
   - Otherwise add / refresh pages
 
 Usage:
-  python load_chart_info.py              # write CSVs, then load into DB
+  python load_chart_info.py              # write CSVs, load charts/pages + OCR
   python load_chart_info.py --csv-only   # write CSVs only
-  python load_chart_info.py --db-only    # load existing CSVs into DB only
+  python load_chart_info.py --db-only    # load existing CSVs + OCR into DB
+  python load_chart_info.py --skip-ocr   # skip ocr_results load
 """
 
 from __future__ import annotations
@@ -19,7 +21,9 @@ from __future__ import annotations
 import argparse
 import csv
 import io
+import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -54,6 +58,16 @@ PAGE_HEADERS = [
     "ocr_prelim_status",
     "ocr_final_status",
 ]
+
+OCR_HEADERS = ["chart_name", "page_name", "ocr_type", "raw_text"]
+
+# file suffix → ocr_results.ocr_type
+OCR_FILE_MAP: list[tuple[str, str, tuple[str, ...]]] = [
+    ("prelim", "tesseract", (".txt",)),
+    ("final1", "docling", (".txt",)),
+    ("final2", "azuredocintel", (".json", ".txt")),
+]
+OCR_MARKER_RE = re.compile(r"^=====\s*(.+?)\s*=====\s*$", re.MULTILINE)
 
 
 def _read_csv(path: Path) -> list[dict[str, str]]:
@@ -321,6 +335,275 @@ def load_csvs_into_db(conn: object, *, chart_csv: Path, page_csv: Path) -> None:
     )
 
 
+def find_ocr_file(folder: Path, suffix: str, exts: tuple[str, ...]) -> Path | None:
+    ocr_dir = folder / "ocr"
+    if not ocr_dir.is_dir():
+        return None
+    base = f"{folder.name}_{suffix}"
+    for ext in exts:
+        path = ocr_dir / f"{base}{ext}"
+        if path.is_file():
+            return path
+    for ext in exts:
+        matches = sorted(
+            p
+            for p in ocr_dir.iterdir()
+            if p.is_file()
+            and p.name.endswith(f"_{suffix}{ext}")
+            and not p.name.startswith("._")
+        )
+        if matches:
+            return matches[0]
+    return None
+
+
+def split_ocr_by_page(text: str) -> dict[str, str]:
+    matches = list(OCR_MARKER_RE.finditer(text))
+    if not matches:
+        return {"__all__": text}
+    out: dict[str, str] = {}
+    for i, m in enumerate(matches):
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        out[m.group(1).strip()] = text[start:end].strip()
+    return out
+
+
+def azdoc_json_page_texts(raw: str) -> dict[str, str]:
+    """Map page filename → content from AzDocInt JSON; empty if not JSON pages."""
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    pages = data.get("pages") if isinstance(data, dict) else data
+    if not isinstance(pages, list):
+        return {}
+    out: dict[str, str] = {}
+    for i, page in enumerate(pages, start=1):
+        if not isinstance(page, dict):
+            continue
+        filename = (
+            page.get("fileName") or page.get("filename") or f"{i}.jpg"
+        )
+        body = page.get("content") or ""
+        if not body and isinstance(page.get("lines"), list):
+            body = "\n".join(
+                str(line.get("content", ""))
+                for line in page["lines"]
+                if isinstance(line, dict)
+            )
+        out[str(filename).strip()] = body
+    return out
+
+
+def collect_ocr_rows(data_root: Path) -> list[dict[str, str]]:
+    """Parse data/folders/<chart>/ocr/* into staging rows for ocr_results."""
+    rows: list[dict[str, str]] = []
+    folders = sorted(
+        p for p in data_root.iterdir() if p.is_dir() and not p.name.startswith(".")
+    )
+    for folder in folders:
+        page_names = [name for name, _ in list_page_files(folder)]
+        for suffix, ocr_type, exts in OCR_FILE_MAP:
+            path = find_ocr_file(folder, suffix, exts)
+            if path is None:
+                continue
+            raw = path.read_text(encoding="utf-8", errors="replace")
+            by_page: dict[str, str] = {}
+            if path.suffix.lower() == ".json":
+                by_page = azdoc_json_page_texts(raw)
+                if not by_page:
+                    # store full JSON on every page if structure unknown
+                    for page_name in page_names:
+                        rows.append(
+                            {
+                                "chart_name": folder.name,
+                                "page_name": page_name,
+                                "ocr_type": ocr_type,
+                                "raw_text": raw,
+                            }
+                        )
+                    continue
+            else:
+                by_page = split_ocr_by_page(raw)
+
+            if "__all__" in by_page:
+                payload = by_page["__all__"]
+                targets = page_names or ["__document__"]
+                for page_name in targets:
+                    rows.append(
+                        {
+                            "chart_name": folder.name,
+                            "page_name": page_name if page_names else "1.jpg",
+                            "ocr_type": ocr_type,
+                            "raw_text": payload,
+                        }
+                    )
+                continue
+
+            # Prefer known page files; also keep unmatched marker keys
+            used: set[str] = set()
+            for page_name in page_names:
+                chunk = by_page.get(page_name)
+                if chunk is None:
+                    for key, val in by_page.items():
+                        if key.lower() == page_name.lower():
+                            chunk = val
+                            break
+                if chunk is None:
+                    continue
+                used.add(page_name)
+                rows.append(
+                    {
+                        "chart_name": folder.name,
+                        "page_name": page_name,
+                        "ocr_type": ocr_type,
+                        "raw_text": chunk,
+                    }
+                )
+            for key, val in by_page.items():
+                if key in used:
+                    continue
+                # skip if already matched case-insensitively
+                if any(key.lower() == u.lower() for u in used):
+                    continue
+                rows.append(
+                    {
+                        "chart_name": folder.name,
+                        "page_name": key,
+                        "ocr_type": ocr_type,
+                        "raw_text": val,
+                    }
+                )
+    return rows
+
+
+def load_ocr_into_db(conn: object, data_root: Path) -> None:
+    """Load folder ocr/* files into ocr_results (batched COPY)."""
+    rows = collect_ocr_rows(data_root)
+    if not rows:
+        print("No OCR files under data/folders/*/ocr — skip ocr_results")
+        return
+
+    print(
+        f"Loading {len(rows)} OCR page-rows → ocr_results "
+        f"in batches of {BATCH_SIZE} …"
+    )
+    charts = sorted({r["chart_name"] for r in rows})
+
+    with conn.cursor() as cur:
+        # Replace OCR for charts we are about to load
+        cur.execute(
+            """
+            CREATE TEMP TABLE stg_ocr_charts (
+                chart_name TEXT
+            ) ON COMMIT DROP
+            """
+        )
+        _copy_csv(cur, "stg_ocr_charts", ["chart_name"], [{"chart_name": c} for c in charts])
+        cur.execute(
+            """
+            DELETE FROM ocr_results o
+             WHERE o.chart_id IN (
+                SELECT c.id FROM chart_list c
+                JOIN stg_ocr_charts s ON s.chart_name = c.chart_name
+             )
+            """
+        )
+        conn.commit()
+        print(f"  Cleared ocr_results for {len(charts)} charts")
+
+        cur.execute(
+            """
+            CREATE TEMP TABLE stg_ocr (
+                chart_name TEXT,
+                page_name TEXT,
+                ocr_type TEXT,
+                raw_text TEXT
+            ) ON COMMIT DELETE ROWS
+            """
+        )
+
+        inserted = 0
+        for batch_i, batch_n, batch in iter_batches(rows):
+            _copy_csv(cur, "stg_ocr", OCR_HEADERS, batch)
+            cur.execute(
+                """
+                WITH inserted AS (
+                    INSERT INTO ocr_results (chart_id, page_id, ocr_type, raw_text)
+                    SELECT
+                        c.id,
+                        p.id,
+                        s.ocr_type,
+                        s.raw_text
+                    FROM stg_ocr s
+                    JOIN (
+                        SELECT DISTINCT ON (chart_name) id, chart_name
+                        FROM chart_list
+                        ORDER BY chart_name, id
+                    ) c ON c.chart_name = s.chart_name
+                    JOIN LATERAL (
+                        SELECT id
+                        FROM page_list
+                        WHERE chart_id = c.id
+                          AND (
+                            page_name = s.page_name
+                            OR lower(page_name) = lower(s.page_name)
+                          )
+                        ORDER BY id
+                        LIMIT 1
+                    ) p ON TRUE
+                    WHERE s.ocr_type IN ('tesseract', 'docling', 'azuredocintel')
+                    RETURNING 1
+                )
+                SELECT COUNT(*) FROM inserted
+                """
+            )
+            n = int(cur.fetchone()[0])
+            inserted += n
+
+            # Update page OCR status flags for this batch
+            cur.execute(
+                """
+                UPDATE page_list p
+                   SET ocr_prelim_status = 'completed',
+                       updated_at = now()
+                  FROM stg_ocr s
+                  JOIN (
+                      SELECT DISTINCT ON (chart_name) id, chart_name
+                      FROM chart_list
+                      ORDER BY chart_name, id
+                  ) c ON c.chart_name = s.chart_name
+                 WHERE p.chart_id = c.id
+                   AND p.page_name = s.page_name
+                   AND s.ocr_type = 'tesseract'
+                """
+            )
+            cur.execute(
+                """
+                UPDATE page_list p
+                   SET ocr_final_status = 'completed',
+                       updated_at = now()
+                  FROM stg_ocr s
+                  JOIN (
+                      SELECT DISTINCT ON (chart_name) id, chart_name
+                      FROM chart_list
+                      ORDER BY chart_name, id
+                  ) c ON c.chart_name = s.chart_name
+                 WHERE p.chart_id = c.id
+                   AND p.page_name = s.page_name
+                   AND s.ocr_type IN ('docling', 'azuredocintel')
+                """
+            )
+            conn.commit()
+            print(
+                f"  ocr_results batch {batch_i}/{batch_n}: "
+                f"{len(batch)} staged, {n} inserted"
+            )
+
+    print(f"Done — inserted {inserted} OCR rows for {len(charts)} charts")
+
+
 def main() -> None:
     ui_root = bootstrap_env()
     parser = argparse.ArgumentParser(
@@ -345,6 +628,11 @@ def main() -> None:
         "--db-only",
         action="store_true",
         help="Load existing pipeline CSVs into DB only",
+    )
+    parser.add_argument(
+        "--skip-ocr",
+        action="store_true",
+        help="Skip loading data/folders/*/ocr into ocr_results",
     )
     parser.add_argument("--schema", default=None)
     args = parser.parse_args()
@@ -396,6 +684,14 @@ def main() -> None:
     with psycopg.connect(database_url) as conn:
         configure_connection(conn)
         load_csvs_into_db(conn, chart_csv=chart_csv, page_csv=page_csv)
+        if not args.skip_ocr:
+            print("\n=== 3) Load OCR files → ocr_results ===")
+            if not data_root.is_dir():
+                print(f"DATA_ROOT not found for OCR: {data_root}", file=sys.stderr)
+            else:
+                load_ocr_into_db(conn, data_root)
+        else:
+            print("\n=== 3) OCR skipped (--skip-ocr) ===")
 
 
 if __name__ == "__main__":

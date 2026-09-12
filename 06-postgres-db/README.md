@@ -27,6 +27,7 @@ pip install -r requirements.txt
 python test_db_connection.py   # optional connectivity check
 
 # 1) Scan data/folders → write/append data/pipeline/chart_list.csv + page_list.csv → upsert DB
+#    also loads data/folders/*/ocr → ocr_results
 python load_chart_info.py
 
 # 2) Load CSVs from data/metadata + data/pipeline into DB tables
@@ -35,7 +36,7 @@ python load_pipeline.py
 
 | Script | Reads | Writes |
 |--------|-------|--------|
-| `load_chart_info.py` | `data/folders/<chart>/pages` | `data/pipeline/chart_list.csv`, `page_list.csv` → `chart_list`, `page_list` |
+| `load_chart_info.py` | `data/folders/<chart>/pages`, `data/folders/<chart>/ocr` | `data/pipeline/chart_list.csv`, `page_list.csv` → `chart_list`, `page_list`; OCR → `ocr_results` |
 | `load_pipeline.py` | `data/metadata/metadata_R*_B*.csv`, `data/pipeline/*.csv` | `manifest_member_list`, `dos_extraction_results`, `ocr_quality_results` |
 
 `load_chart_info` **skips** a folder when it already exists in `chart_list.csv` with the **same page_count**.
