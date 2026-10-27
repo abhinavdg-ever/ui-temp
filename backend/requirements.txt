@@ -1,0 +1,27 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.12
+pydantic-settings>=2.6.0
+python-dotenv>=1.0.1
+# TIFF → JPEG for browser <img> (Chrome/Firefox cannot render image/tiff)
+Pillow>=10.0.0
+# Azure Blob via Microsoft Entra ID (Shared Key not required)
+azure-identity>=1.19.0
+azure-storage-blob>=12.24.0
+# Optional — only needed when DATA_MODE=postgres
+# sqlalchemy>=2.0.36
+psycopg[binary]>=3.2.3
+psycopg-pool>=3.2
+# Optional — accuracy report semantic page-type match (MiniLM via ONNX;
+# model folder core-pipeline/models/semantic-model or SEMANTIC_MODEL_PATH)
+onnxruntime>=1.17
+tokenizers>=0.15
+numpy>=1.26
+# Manual Review (QA ground truth vs algo output): reading CSV / XLSX / XLS
+# uploads, writing the report workbook and the Master Summary PDF. Rebuild the image after a change
+# here (`docker compose up -d --build`); a stale image fails with
+# "No module named 'pandas'".
+pandas>=2.2,<4
+openpyxl>=3.1
+xlrd>=2.0
+reportlab>=4.0

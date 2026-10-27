@@ -1,20 +1,10 @@
-.venv/
-venv/
-**/venv/
-**/__pycache__/
+.env
+node_modules/
+dist/
 __pycache__/
 *.pyc
-.env
-.env.local
-node_modules/
-**/node_modules/
-frontend/dist/
-**/frontend/dist/
+.venv/
 .DS_Store
 ._*
-**/._*
-*.egg-info/
-.pytest_cache/
-**/dos-extraction/output/
-# Local pipeline CSV drop folder (keep README/.gitkeep; ignore data files)
-05-imaging-ui/data/pipeline/*.csv
+data/*
+!data/empty/

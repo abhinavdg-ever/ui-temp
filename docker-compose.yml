@@ -1,0 +1,68 @@
+# Client review UI: review-ui for the client, on ports 5000 (API) / 5001 (web),
+# reading its own database (imaging_outputs_client). Database only, no Playground.
+#
+#   cp .env.example .env      # then set DATABASE_URL, ALLOWED_ORIGINS, AUTH_SECRET, Azure Blob
+#   docker compose up -d --build
+#
+# The project name is fixed, so these containers (client-review-*) never replace
+# our review-ui (4000 / 4001) on the same VM. backend/ and frontend/ are copied from
+# the main repo's review-ui by utilities/sync_client_ui.sh; don't edit them here.
+
+name: client-review
+
+services:
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "${BACKEND_PORT:-5000}:3000"
+    env_file:
+      - ./.env
+    environment:
+      # Postgres only: the client never sees our disk workspace.
+      DATA_MODE: production
+      DATA_ROOT: /data/folders
+      METADATA_ROOT: /data/metadata
+      PIPELINE_ROOT: /data/pipeline
+      MONOREPO_ROOT: /data/pipeline
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://172.20.4.170:5001,http://localhost:5001}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://USER:PASSWORD@HOST:5432/imaging_outputs_client}
+      DB_SCHEMA: ${DB_SCHEMA:-public}
+      DB_POOL_MIN: ${DB_POOL_MIN:-2}
+      DB_POOL_MAX: ${DB_POOL_MAX:-10}
+      DB_POOL_WAIT_SEC: ${DB_POOL_WAIT_SEC:-10}
+      LOCAL_CACHE_TTL_SECONDS: ${LOCAL_CACHE_TTL_SECONDS:-5}
+      FILE_VIEWER_BLOB_ENABLED: ${FILE_VIEWER_BLOB_ENABLED:-false}
+      # Page images: the same Azure Blob settings as our review-ui/.env.
+      AZURE_STORAGE_AUTH: ${AZURE_STORAGE_AUTH:-entra}
+      AZURE_STORAGE_ACCOUNT_NAME: ${AZURE_STORAGE_ACCOUNT_NAME:-}
+      AZURE_STORAGE_ACCOUNT_KEY: ${AZURE_STORAGE_ACCOUNT_KEY:-}
+      AZURE_STORAGE_CONNECTION_STRING: ${AZURE_STORAGE_CONNECTION_STRING:-}
+      AZURE_STORAGE_CONTAINER: ${AZURE_STORAGE_CONTAINER:-}
+      BLOB_AUTH_MODE: ${BLOB_AUTH_MODE:-}
+      BLOB_ACCOUNT_URL: ${BLOB_ACCOUNT_URL:-}
+      BLOB_CONTAINER: ${BLOB_CONTAINER:-}
+      BLOB_PATH_TEMPLATE: ${BLOB_PATH_TEMPLATE:-{folder}/pages/{filename}}
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
+      AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET:-}
+      BLOB_SAS_TOKEN: ${BLOB_SAS_TOKEN:-}
+      # No Playground: the client cannot start pipeline runs, whatever .env says.
+      CORE_PIPELINE_URLS: ""
+    volumes:
+      # Empty folders: Local mode (top bar) shows nothing.
+      - ./data/empty:/data/folders:ro
+      - ./data/empty:/data/pipeline:ro
+      - ./data/empty:/data/metadata:ro
+      # Optional: MiniLM for the accuracy report's semantic page-type match.
+      - ${SEMANTIC_MODEL_HOST_PATH:-./data/empty}:/models/semantic-model:ro
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "${FRONTEND_PORT:-5001}:3001"
+    depends_on:
+      - backend
+    restart: unless-stopped

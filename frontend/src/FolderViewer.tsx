@@ -1,0 +1,1837 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  Download,
+  FileText,
+  Maximize2,
+  Menu,
+  Minimize2,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+  ScanSearch,
+  ZoomIn,
+  ZoomOut,
+} from "lucide-react";
+import {
+  getFolder,
+  getFolderExtractionPages,
+  getFolderImaging,
+  getFolderOcr,
+  OCR_TAB_LABELS,
+  pageImageUrl,
+  retryPageImages,
+  type ExtractionPagesResponse,
+  type ExtractionReviewResponse,
+  type FolderDetail,
+  type ImagingDocumentResponse,
+  type ImagingPageResult,
+  type PageGroundTruth,
+  type OcrKind,
+  type OcrSectionHeader,
+  type OutputMode,
+} from "./api";
+import ImagingPanel, {
+  additionalSectionHeaders,
+  fillDocDosForDownload,
+  headerTier,
+  type GroundTruthLeave,
+  type ImagingTab,
+} from "./ImagingPanel";
+import { formatDuplicateDownload } from "./duplicateLabel";
+import {
+  formatMatchRatePercent,
+  isUsableOcrPayload,
+  matchRateTitle,
+  matchRateToneClass,
+  pageMatchRate,
+} from "./ocrMatchRate";
+import { ocrTextForFilename } from "./ocrPages";
+import { prepareOcrLines } from "./ocrFormat";
+import FullscreenPageChrome from "./FullscreenPageChrome";
+import PageJump from "./PageJump";
+import { blankJunkTruth } from "./groundTruth";
+import { useImagePan } from "./useImagePan";
+import { usePageViewerHotkeys } from "./usePageViewerHotkeys";
+import { loadEncounterReview } from "./ReviewTables";
+import type { ChartRef } from "./chartSequence";
+
+type Props = {
+  folderId: string;
+  initialMode?: OutputMode;
+  /** The page number (page_number) to open at, e.g. from a Search result. */
+  initialPage?: number;
+  onBack: () => void;
+  /** The chart after this one in the list it was opened from; null at the end. */
+  findNextChart?: () => Promise<ChartRef | null>;
+  onOpenNext?: (folderId: string) => void;
+  onModeChange?: (mode: OutputMode) => void;
+  onBindLeave?: (guard: ((run: () => void) => void) | null) => void;
+};
+
+const OCR_TABS: OcrKind[] = ["preliminary", "final1", "final2"];
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 3;
+const ZOOM_STEP = 0.25;
+
+const KIND_FILE_SUFFIX: Record<OcrKind, string> = {
+  preliminary: "prelim",
+  final1: "final1",
+  final2: "final2",
+};
+
+function downloadTextFile(filename: string, text: string, mime = "text/plain;charset=utf-8") {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function downloadJsonFile(filename: string, data: unknown) {
+  downloadTextFile(filename, JSON.stringify(data, null, 2), "application/json;charset=utf-8");
+}
+
+function findImagingPage(
+  doc: ImagingDocumentResponse | null,
+  page: { page_number: number; filename: string } | null,
+): ImagingPageResult | null {
+  if (!doc || !page) return null;
+  const byFile = doc.pages.find(
+    (p) => p.fileName.toLowerCase() === page.filename.toLowerCase(),
+  );
+  if (byFile) return byFile;
+  return doc.pages.find((p) => p.pageNumber === page.page_number) ?? null;
+}
+
+/** A corrected file exists only when orientation or tilt was actually applied. */
+/** How stage 1 corrected the page: turned (orientation) wins over straightened (tilt). */
+function correctionKind(page: ImagingPageResult | null | undefined): "orientation" | "tilt" | null {
+  if (!page) return null;
+  const orient = Number(page.orientationAngle);
+  const tilt = Number(page.tiltAngle);
+  if (Number.isFinite(orient) && Math.abs(orient) >= 0.5) return "orientation";
+  if (Number.isFinite(tilt) && Math.abs(tilt) >= 0.05) return "tilt";
+  return null;
+}
+
+function pageNeedsCorrection(page: ImagingPageResult | null | undefined): boolean {
+  if (!page) return false;
+  const orient = Number(page.orientationAngle);
+  const tilt = Number(page.tiltAngle);
+  const turned = Number.isFinite(orient) && Math.abs(orient) >= 0.5;
+  const skewed = Number.isFinite(tilt) && Math.abs(tilt) >= 0.05;
+  return turned || skewed;
+}
+
+/** Azure Final2 is skipped for high-quality printed pages (billed stage). */
+const FINAL2_QUALITY_SKIP_MESSAGE = "Skipped for High Quality Images";
+const FINAL_OCR_BLANK_JUNK_SKIP_MESSAGE = "Skipped for Blank/Junk";
+
+function isBlankOrJunkYes(page: ImagingPageResult | null): boolean {
+  const v = (page?.blankOrJunk || "").trim().toLowerCase();
+  return v.startsWith("yes");
+}
+
+/** The ground truth calls the page blank or junk (Yes (Blank) / Yes (Junk)). */
+function isBlankOrJunkTruth(page: ImagingPageResult | null): boolean {
+  if (!page?.groundTruth) return false;
+  return (blankJunkTruth(page.groundTruth) ?? "").toLowerCase().startsWith("yes");
+}
+
+function isBlankPage(page: ImagingPageResult): boolean {
+  return (page.blankOrJunk || "").trim().toLowerCase() === "yes (blank)";
+}
+
+/** File names that have at least one canon-matched section header. */
+function clinicalHeaderNames(
+  headersByKind: Partial<Record<string, Record<string, OcrSectionHeader[]>>>,
+): Set<string> {
+  const names = new Set<string>();
+  for (const byFile of Object.values(headersByKind)) {
+    if (!byFile) continue;
+    for (const [name, headers] of Object.entries(byFile)) {
+      if (!headers.some((header) => header.text.trim())) continue;
+      names.add(name);
+      names.add(name.toLowerCase());
+    }
+  }
+  return names;
+}
+
+/**
+ * A page marked Blank that still carries a recognized clinical header is not
+ * blank. Show it as Junk and force the page type to Others.
+ */
+function forcefitBlankClinical(
+  doc: ImagingDocumentResponse,
+  headerNames: Set<string>,
+): ImagingDocumentResponse {
+  if (headerNames.size === 0) return doc;
+  let changed = false;
+  const pages = doc.pages.map((page) => {
+    if (!isBlankPage(page)) return page;
+    const name = page.fileName || "";
+    if (!headerNames.has(name) && !headerNames.has(name.toLowerCase())) return page;
+    changed = true;
+    return { ...page, blankOrJunk: "Yes (Junk)", pageType: "Others" };
+  });
+  return changed ? { ...doc, pages } : doc;
+}
+
+/** Infer Final2 quality-skip from imaging when JSON has no skippedReason yet. */
+/** One page's extraction review from the chart-wide response: by file name, then
+ * case-insensitively, then by stem (1.jpg ↔ 1.png). */
+function extractionForPage(
+  all: ExtractionPagesResponse | null,
+  filename: string | undefined,
+): ExtractionReviewResponse | null {
+  if (!all || !filename) return null;
+  const exact = all.pages[filename];
+  if (exact) return exact;
+  const want = filename.toLowerCase();
+  const stem = want.replace(/\.[^.]+$/, "");
+  for (const [name, review] of Object.entries(all.pages)) {
+    const key = name.toLowerCase();
+    if (key === want || key.replace(/\.[^.]+$/, "") === stem) return review;
+  }
+  return null;
+}
+
+function isFinal2QualitySkip(page: ImagingPageResult | null): boolean {
+  if (!page || isBlankOrJunkYes(page)) return false;
+  const type = (page.documentType || page.handwrittenOrPrinted || "").trim().toLowerCase();
+  const tag = (page.pageQualityTag || "").trim().toLowerCase();
+  return type === "printed" && tag === "high";
+}
+
+function isOcrSkipMessage(text: string): boolean {
+  const t = text.trim();
+  return (
+    t === FINAL2_QUALITY_SKIP_MESSAGE ||
+    t === FINAL_OCR_BLANK_JUNK_SKIP_MESSAGE ||
+    t.startsWith("Skipped for ")
+  );
+}
+
+export default function FolderViewer({
+  folderId,
+  initialMode = "ocr",
+  initialPage,
+  onBack,
+  findNextChart,
+  onOpenNext,
+  onModeChange,
+  onBindLeave,
+}: Props) {
+  const [folder, setFolder] = useState<FolderDetail | null>(null);
+  const [pageIndex, setPageIndex] = useState(0);
+  const [outputMode, setOutputMode] = useState<OutputMode>(initialMode);
+  const [ocrTab, setOcrTab] = useState<OcrKind>("preliminary");
+  const [showSectionHeaders, setShowSectionHeaders] = useState(false);
+  const [imagingTab, setImagingTab] = useState<ImagingTab>("page");
+  const [headerHighlight, setHeaderHighlight] = useState<"all" | number | null>(null);
+  const [ocrByKind, setOcrByKind] = useState<Partial<Record<OcrKind, string>>>({});
+  const [headersByKind, setHeadersByKind] = useState<
+    Partial<Record<OcrKind, Record<string, OcrSectionHeader[]>>>
+  >({});
+  const [imagingDoc, setImagingDoc] = useState<ImagingDocumentResponse | null>(null);
+  const [loadingFolder, setLoadingFolder] = useState(true);
+  const [loadingOcr, setLoadingOcr] = useState(initialMode === "ocr");
+  const [loadingImaging, setLoadingImaging] = useState(initialMode === "imaging");
+  const [imagingError, setImagingError] = useState<string | null>(null);
+  const [extractionPages, setExtractionPages] = useState<ExtractionPagesResponse | null>(null);
+  const extractionFetchedRef = useRef(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  // Fullscreen: the page results drawer on the right, collapsed on entry.
+  const [fsResultsOpen, setFsResultsOpen] = useState(false);
+  const [pendingLeave, setPendingLeave] = useState<(() => void) | null>(null);
+  const [leaveBusy, setLeaveBusy] = useState(false);
+  const groundTruthLeave = useRef<GroundTruthLeave | null>(null);
+  const pageIndexRef = useRef(0);
+  const [outputExpanded, setOutputExpanded] = useState(false);
+  const [imageNaturalSize, setImageNaturalSize] = useState<{ w: number; h: number } | null>(
+    null,
+  );
+  const [pageImageLoading, setPageImageLoading] = useState(true);
+  // A page image failed (Blob sign-in failed and no local copy): the rest of the folder
+  // still shows, with a bar above the images to load them again.
+  const [imagesFailed, setImagesFailed] = useState(false);
+  // The server's reason for the first failed image (an <img> cannot read it itself).
+  const [imageFailReason, setImageFailReason] = useState<string | null>(null);
+  const [imageAttempt, setImageAttempt] = useState(0);
+  const [retryingImages, setRetryingImages] = useState(false);
+  const [showCorrected, setShowCorrected] = useState(false);
+  const [highlightBlankJunk, setHighlightBlankJunk] = useState(false);
+  const [highlightDuplicate, setHighlightDuplicate] = useState(false);
+  const [viewMenuOpen, setViewMenuOpen] = useState(false);
+  const viewMenuRef = useRef<HTMLDivElement>(null);
+  const [stageSize, setStageSize] = useState<{ w: number; h: number } | null>(null);
+  const pageStageRef = useRef<HTMLDivElement>(null);
+  const pageImageRef = useRef<HTMLImageElement>(null);
+  const {
+    resetPan,
+    imageStyle,
+    stageProps,
+    stageClassName,
+  } = useImagePan(zoom, `${folderId}:${pageIndex}:${showCorrected ? "c" : "o"}`);
+
+  function resetZoom() {
+    setZoom(1);
+    resetPan();
+  }
+
+  useEffect(() => {
+    setImageNaturalSize(null);
+    setPageImageLoading(true);
+  }, [folderId, pageIndex, showCorrected, imageAttempt]);
+
+  useEffect(() => {
+    setImagesFailed(false);
+    setImageFailReason(null);
+  }, [folderId]);
+
+  /** An image failed: show the bar, and ask the server once why (its ``detail``). */
+  function imageFailed(url: string) {
+    setImagesFailed(true);
+    if (imageFailReason !== null) return;
+    setImageFailReason("");
+    fetch(url)
+      .then(async (res) => {
+        if (res.ok) return;
+        let detail = "";
+        try {
+          detail = String(((await res.json()) as { detail?: unknown }).detail ?? "");
+        } catch {
+          /* not JSON */
+        }
+        setImageFailReason(detail || `${res.status} ${res.statusText}`);
+      })
+      .catch((err: unknown) => setImageFailReason(err instanceof Error ? err.message : String(err)));
+  }
+
+  // The Encounter tab's ground truth, fetched once the imaging results are in so the
+  // tab opens without waiting (and without delaying the chart's own load).
+  const imagingLoaded = imagingDoc != null;
+  useEffect(() => {
+    if (imagingLoaded) loadEncounterReview(folderId).catch(() => undefined);
+  }, [folderId, imagingLoaded]);
+
+  async function retryImages() {
+    setRetryingImages(true);
+    await retryPageImages();
+    setImagesFailed(false);
+    setImageFailReason(null);
+    setImageAttempt((n) => n + 1);
+    setRetryingImages(false);
+  }
+
+  // Cached images often skip onLoad — pick up natural size when the page flips.
+  useEffect(() => {
+    const img = pageImageRef.current;
+    if (img?.complete && img.naturalWidth > 0) {
+      setPageImageLoading(false);
+      setImageNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
+    }
+  }, [folderId, pageIndex, folder, showCorrected]);
+
+  // Fit the page image into the stage (document-processing pattern) so the
+  // overlay container matches the displayed image — not a clipped wrap.
+  useEffect(() => {
+    const el = pageStageRef.current;
+    if (!el) return;
+    const measure = () => {
+      const style = getComputedStyle(el);
+      const padX =
+        (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+      const padY =
+        (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+      setStageSize({
+        w: Math.max(0, el.clientWidth - padX),
+        h: Math.max(0, el.clientHeight - padY),
+      });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [folderId, outputExpanded, isFullscreen]);
+
+  const fittedImageSize = useMemo(() => {
+    if (!imageNaturalSize?.w || !imageNaturalSize?.h || !stageSize?.w || !stageSize?.h) {
+      return null;
+    }
+    const fit = Math.min(
+      stageSize.w / imageNaturalSize.w,
+      stageSize.h / imageNaturalSize.h,
+    );
+    return {
+      w: Math.max(1, imageNaturalSize.w * fit),
+      h: Math.max(1, imageNaturalSize.h * fit),
+    };
+  }, [imageNaturalSize, stageSize]);
+
+  useEffect(() => {
+    setOutputMode(initialMode);
+  }, [initialMode]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingFolder(true);
+    setError(null);
+    setPageIndex(0);
+    setOcrTab("preliminary");
+    setImagingTab("page");
+    setHeaderHighlight(null);
+    setImagingDoc(null);
+    setOcrByKind({});
+    setHeadersByKind({});
+    setZoom(1);
+    setShowCorrected(false);
+    getFolder(folderId)
+      .then((data) => {
+        if (cancelled) return;
+        setFolder(data);
+        // Opened at a page (a Search result in a new tab): start there.
+        const at = initialPage ? data.pages.findIndex((p) => p.page_number === initialPage) : -1;
+        if (at > 0) setPageIndex(at);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Failed to load chart");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingFolder(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [folderId]);
+
+  useEffect(() => {
+    function onFsChange() {
+      const on = document.fullscreenElement === pageStageRef.current;
+      setIsFullscreen(on);
+      // Entering fullscreen always starts at 100%; zoom then persists across pages.
+      if (on) {
+        setZoom(1);
+        resetPan();
+        setFsResultsOpen(false);
+      }
+    }
+    document.addEventListener("fullscreenchange", onFsChange);
+    return () => document.removeEventListener("fullscreenchange", onFsChange);
+  }, [resetPan]);
+
+  pageIndexRef.current = pageIndex;
+
+  // undefined while it is being looked up.
+  const [nextChart, setNextChart] = useState<ChartRef | null | undefined>(undefined);
+  useEffect(() => {
+    if (!findNextChart) return;
+    let cancelled = false;
+    findNextChart()
+      .then((next) => {
+        if (!cancelled) setNextChart(next);
+      })
+      .catch(() => {
+        if (!cancelled) setNextChart(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Looked up once per chart: the viewer remounts on a new folderId.
+  }, []);
+
+  function guardLeave(run: () => void) {
+    if (!groundTruthLeave.current?.dirty) {
+      run();
+      return;
+    }
+    setPendingLeave(() => run);
+  }
+
+  function goToPage(idx: number | ((i: number) => number)) {
+    const current = pageIndexRef.current;
+    const next = typeof idx === "function" ? idx(current) : idx;
+    if (next === current) return;
+    guardLeave(() => {
+      setPageIndex(next);
+      // Outside fullscreen, new pages open at 100%. In fullscreen, keep the zoom.
+      if (!isFullscreen) resetZoom();
+    });
+  }
+
+  const page = folder?.pages[pageIndex] ?? null;
+  const displayImagingDoc = useMemo(
+    () =>
+      imagingDoc
+        ? forcefitBlankClinical(imagingDoc, clinicalHeaderNames(headersByKind))
+        : null,
+    [imagingDoc, headersByKind],
+  );
+  const imagingPage = useMemo(
+    () => findImagingPage(displayImagingDoc, page),
+    [displayImagingDoc, page],
+  );
+  const canShowCorrected = pageNeedsCorrection(imagingPage);
+  // Header boxes are measured on the image the OCR read, which is the corrected page when
+  // stage 1 turned or straightened it. While they are drawn, show that image, or a tilted
+  // original puts every box a little off its text.
+  const headerBoxesOn =
+    (outputMode === "imaging" && imagingTab === "additional" && headerHighlight != null) ||
+    (outputMode === "ocr" && showSectionHeaders && (ocrTab === "final1" || ocrTab === "final2"));
+  const useCorrected = (showCorrected || headerBoxesOn) && canShowCorrected;
+
+  useEffect(() => {
+    if (!viewMenuOpen) return;
+    function onPointerDown(event: MouseEvent) {
+      if (!viewMenuRef.current?.contains(event.target as Node)) setViewMenuOpen(false);
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, [viewMenuOpen]);
+
+  function pageMarkClass(imaging: ImagingPageResult | null): string {
+    const marks: string[] = [];
+    // A duplicate has its own colour under either highlight; Blank/Junk marks only true
+    // blank / junk pages (2026-10-26, user).
+    const duplicate = imaging?.isDuplicate === true;
+    if ((highlightBlankJunk || highlightDuplicate) && duplicate) marks.push("mark-duplicate");
+    if (highlightBlankJunk && !duplicate) {
+      // Both the pipeline and the ground truth: green. The pipeline only: amber. The
+      // ground truth only (a blank / junk page the pipeline missed): red.
+      const ours = isBlankOrJunkYes(imaging);
+      const truth = isBlankOrJunkTruth(imaging);
+      if (ours && truth) marks.push("mark-blank-junk");
+      else if (ours) marks.push("mark-blank-junk mark-bj-ours");
+      else if (truth) marks.push("mark-blank-junk mark-bj-truth");
+    }
+    // Show Corrected Images: the pages stage 1 corrected, an orientation fix darker than a tilt.
+    const corrected = showCorrected ? correctionKind(imaging) : null;
+    if (corrected) marks.push(corrected === "orientation" ? "mark-corrected mark-orient" : "mark-corrected mark-tilt");
+    return marks.join(" ");
+  }
+
+  useEffect(() => {
+    setHeaderHighlight(null);
+  }, [folderId, page?.filename]);
+
+  // Page 1 is almost always page_number 1: start its download with the
+  // folder request so the first image is cached by the time <img> mounts.
+  useEffect(() => {
+    const img = new Image();
+    img.src = pageImageUrl(folderId, 1, {
+      corrected: showCorrected && pageNeedsCorrection(findImagingPage(imagingDoc, folder?.pages[0] ?? null)),
+    });
+  }, [folderId, showCorrected, imagingDoc, folder]);
+
+  // Once the current page has loaded, warm the neighbours so flipping is instant.
+  useEffect(() => {
+    if (!folder || pageImageLoading) return;
+    for (const idx of [pageIndex + 1, pageIndex - 1]) {
+      const neighbour = folder.pages[idx];
+      if (neighbour) {
+        const neighbourImaging = findImagingPage(imagingDoc, neighbour);
+        const img = new Image();
+        img.src = pageImageUrl(folderId, neighbour.page_number, {
+          corrected: useCorrected && pageNeedsCorrection(neighbourImaging),
+        });
+      }
+    }
+  }, [folder, folderId, pageIndex, pageImageLoading, useCorrected, imagingDoc]);
+
+  const ocrFetchedRef = useRef<Set<OcrKind>>(new Set());
+  const imagingFetchedRef = useRef(false);
+
+  useEffect(() => {
+    // Reset payloads when the chart changes. Imaging loads with the chart so the
+    // page viewer knows which pages have an orientation or tilt correction.
+    setImagingDoc(null);
+    setOcrByKind({});
+    setHeadersByKind({});
+    setImagingError(null);
+    setExtractionPages(null);
+    extractionFetchedRef.current = false;
+    ocrFetchedRef.current = new Set();
+    imagingFetchedRef.current = false;
+    setLoadingImaging(outputMode === "imaging");
+    // Only reset on chart change — keep cached imaging when flipping OCR ↔ Imaging.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- outputMode read once per folderId
+  }, [folderId]);
+
+  // OCR / imaging fetches need only folderId, so they start in parallel with
+  // getFolder instead of waiting for it.
+  useEffect(() => {
+    if (outputMode !== "ocr") {
+      return;
+    }
+    if (ocrFetchedRef.current.has(ocrTab)) {
+      return;
+    }
+    ocrFetchedRef.current.add(ocrTab);
+    let cancelled = false;
+    setLoadingOcr(true);
+    setCopied(false);
+
+    getFolderOcr(folderId, ocrTab)
+      .then((data) => {
+        if (cancelled) return;
+        setOcrByKind((prev) => ({
+          ...prev,
+          [ocrTab]: data?.text?.trim() ? data.text : "",
+        }));
+        if (data?.section_headers_by_file) {
+          setHeadersByKind((prev) => ({
+            ...prev,
+            [ocrTab]: data.section_headers_by_file,
+          }));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setOcrByKind((prev) => ({ ...prev, [ocrTab]: "" }));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingOcr(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [folderId, outputMode, ocrTab]);
+
+  const ocrFullText = ocrByKind[ocrTab] ?? "";
+  const ocrMissingMessage = `No ${OCR_TAB_LABELS[ocrTab]} available.`;
+
+  useEffect(() => {
+    if (outputMode !== "imaging") {
+      return;
+    }
+    const needFinal1 = !ocrFetchedRef.current.has("final1");
+    const needFinal2 = !ocrFetchedRef.current.has("final2");
+    if (!needFinal1 && !needFinal2) {
+      return;
+    }
+    const kinds = (
+      [
+        needFinal1 ? "final1" : null,
+        needFinal2 ? "final2" : null,
+      ] as const
+    ).filter((k): k is "final1" | "final2" => k != null);
+    for (const k of kinds) ocrFetchedRef.current.add(k);
+
+    let cancelled = false;
+    setLoadingOcr(true);
+    Promise.all(
+      kinds.map(async (kind) => {
+        try {
+          const data = await getFolderOcr(folderId, kind);
+          return [kind, data] as const;
+        } catch {
+          return [kind, null] as const;
+        }
+      }),
+    )
+      .then((entries) => {
+        if (cancelled) return;
+        setOcrByKind((prev) => {
+          const next = { ...prev };
+          for (const [kind, data] of entries) {
+            if (next[kind] === undefined) {
+              next[kind] = data?.text?.trim() ? data.text : "";
+            }
+          }
+          return next;
+        });
+        setHeadersByKind((prev) => {
+          const next = { ...prev };
+          for (const [kind, data] of entries) {
+            if (data?.section_headers_by_file) {
+              next[kind] = data.section_headers_by_file;
+            } else if (next[kind] === undefined) {
+              next[kind] = {};
+            }
+          }
+          return next;
+        });
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingOcr(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [folderId, outputMode]);
+
+  useEffect(() => {
+    if (imagingFetchedRef.current) {
+      return;
+    }
+    imagingFetchedRef.current = true;
+    let cancelled = false;
+    setLoadingImaging(true);
+    setImagingError(null);
+    getFolderImaging(folderId)
+      .then((data) => {
+        if (!cancelled) setImagingDoc(data);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setImagingDoc(null);
+          setImagingError(
+            err instanceof Error ? err.message : "Failed to load imaging results",
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingImaging(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [folderId]);
+
+  // The whole chart's extraction (Section Headers, Page Numbers) in one request when the
+  // chart opens, like the imaging results; changing page is then a lookup, not a fetch.
+  useEffect(() => {
+    if ((outputMode !== "imaging" && outputMode !== "ocr") || extractionFetchedRef.current) {
+      return;
+    }
+    extractionFetchedRef.current = true;
+    let cancelled = false;
+    getFolderExtractionPages(folderId)
+      .then((data) => {
+        if (!cancelled) setExtractionPages(data);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          extractionFetchedRef.current = false;
+          setExtractionPages(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [folderId, outputMode]);
+
+  const extraction = useMemo(
+    () => extractionForPage(extractionPages, page?.filename),
+    [extractionPages, page?.filename],
+  );
+
+  // One full-screen gate until folder + mode payload + first page image are ready.
+  const bootComplete = useMemo(() => {
+    if (error) return true;
+    if (loadingFolder || !folder) return false;
+    if (outputMode === "imaging") {
+      if (loadingImaging || (!imagingDoc && !imagingError)) return false;
+    } else if (loadingOcr || ocrByKind[ocrTab] === undefined) {
+      return false;
+    }
+    if (folder.pages.length > 0 && pageImageLoading) return false;
+    return true;
+  }, [
+    error,
+    loadingFolder,
+    folder,
+    outputMode,
+    loadingImaging,
+    imagingDoc,
+    imagingError,
+    loadingOcr,
+    ocrByKind,
+    ocrTab,
+    pageImageLoading,
+  ]);
+  const [bootDone, setBootDone] = useState(false);
+  useEffect(() => {
+    setBootDone(false);
+  }, [folderId]);
+  useEffect(() => {
+    if (bootComplete) setBootDone(true);
+  }, [bootComplete]);
+  const showBootOverlay = !bootDone && !error;
+
+  const pageOcrText = useMemo(() => {
+    if (loadingOcr) return "";
+    if (!page) return "";
+
+    const resolveSkip = (chunk: string): string | null => {
+      const t = chunk.trim();
+      if (t === FINAL2_QUALITY_SKIP_MESSAGE) return FINAL2_QUALITY_SKIP_MESSAGE;
+      if (t === FINAL_OCR_BLANK_JUNK_SKIP_MESSAGE) {
+        return FINAL_OCR_BLANK_JUNK_SKIP_MESSAGE;
+      }
+      if (t.startsWith("Skipped for ")) return t;
+      return null;
+    };
+
+    // Current imaging wins over a leftover Final2 file (e.g. skip_ocr kept
+    // final2.json while quality re-ran to High+Printed).
+    if (ocrTab === "final2" && isFinal2QualitySkip(imagingPage)) {
+      return FINAL2_QUALITY_SKIP_MESSAGE;
+    }
+
+    if (ocrTab === "final1" || ocrTab === "final2") {
+      // A blank / junk page still shows its Final OCR when that OCR ran (pages
+      // judged in pass 2 have it); the skip note only stands in for missing text.
+      const chunk = ocrFullText ? ocrTextForFilename(ocrFullText, page.filename) : "";
+      const skip = resolveSkip(chunk);
+      if (chunk.trim() && !skip) return chunk;
+      if (isBlankOrJunkYes(imagingPage)) return FINAL_OCR_BLANK_JUNK_SKIP_MESSAGE;
+      if (skip) return skip;
+      if (ocrFullText) return `No OCR text found for ${page.filename}.`;
+    }
+
+    if (ocrTab === "final2" && page.has_final2_ocr && !ocrFullText) {
+      return `No OCR text found for ${page.filename}.`;
+    }
+
+    if (!ocrFullText) return ocrMissingMessage;
+    if (!isUsableOcrPayload(ocrFullText)) return ocrFullText;
+    const chunk = ocrTextForFilename(ocrFullText, page.filename);
+    return chunk || `No OCR text found for ${page.filename}.`;
+  }, [
+    loadingOcr,
+    ocrFullText,
+    ocrMissingMessage,
+    page,
+    ocrTab,
+    imagingPage,
+  ]);
+
+  const showHeaderToggle = ocrTab === "final1" || ocrTab === "final2";
+
+  const pageHeaderBoxes = useMemo(() => {
+    if (!showSectionHeaders || !page) return [];
+    // Don't overlay headers from a Final2 file the UI is treating as skipped.
+    if (ocrTab === "final2" && isFinal2QualitySkip(imagingPage)) return [];
+    if (
+      (ocrTab === "final1" || ocrTab === "final2") &&
+      isBlankOrJunkYes(imagingPage)
+    ) {
+      return [];
+    }
+    return additionalSectionHeaders(extraction).boxes;
+  }, [showSectionHeaders, page, extraction, ocrTab, imagingPage]);
+
+  /** Imaging → Section coordinates: Final2 first, else Final1; skip blank/junk. */
+  const imagingSectionInfo = useMemo(() => {
+    if (!page) {
+      return {
+        headers: [] as OcrSectionHeader[],
+        source: null as "final1" | "final2" | null,
+        skipped: false,
+      };
+    }
+    if (isBlankOrJunkYes(imagingPage)) {
+      return { headers: [] as OcrSectionHeader[], source: null, skipped: true };
+    }
+    const pick = (kind: "final1" | "final2"): OcrSectionHeader[] => {
+      const byFile = headersByKind[kind] ?? {};
+      return (
+        byFile[page.filename] ??
+        byFile[page.filename.toLowerCase()] ??
+        []
+      );
+    };
+    // High+Printed → Final2 was (or should be) skipped; prefer Final1 coords.
+    const preferFinal1 = isFinal2QualitySkip(imagingPage);
+    if (!preferFinal1) {
+      const f2 = pick("final2");
+      if (f2.length > 0) {
+        return { headers: f2, source: "final2" as const, skipped: false };
+      }
+    }
+    const f1 = pick("final1");
+    if (f1.length > 0) {
+      return { headers: f1, source: "final1" as const, skipped: false };
+    }
+    return { headers: [] as OcrSectionHeader[], source: null, skipped: false };
+  }, [page, imagingPage, headersByKind]);
+
+  const heronBoxes = useMemo(
+    () => additionalSectionHeaders(extraction).boxes,
+    [extraction],
+  );
+
+  const overlayBoxes = useMemo(() => {
+    if (outputMode === "imaging" && imagingTab === "additional") {
+      if (imagingSectionInfo.skipped || headerHighlight == null) return [];
+      if (headerHighlight === "all") return heronBoxes;
+      return heronBoxes[headerHighlight] ? [heronBoxes[headerHighlight]] : [];
+    }
+    if (outputMode === "ocr") {
+      return pageHeaderBoxes.filter((b) => b.width > 0 && b.height > 0);
+    }
+    return [];
+  }, [
+    outputMode,
+    imagingTab,
+    imagingSectionInfo,
+    headerHighlight,
+    heronBoxes,
+    pageHeaderBoxes,
+  ]);
+
+  const pageOcrLines = useMemo(() => {
+    if (!showHeaderToggle || !pageOcrText || pageOcrText === ocrMissingMessage) {
+      return null;
+    }
+    if (pageOcrText.startsWith("No OCR text found")) return null;
+    if (isOcrSkipMessage(pageOcrText)) return null;
+    const known = additionalSectionHeaders(extraction).names;
+    return prepareOcrLines(pageOcrText, {
+      showSectionHeaders,
+      detectPlainHeaders: false,
+      knownHeaders: known,
+    });
+  }, [
+    showHeaderToggle,
+    pageOcrText,
+    ocrMissingMessage,
+    showSectionHeaders,
+    extraction,
+  ]);
+
+  const ocrMatch = useMemo(() => {
+    if (!page) {
+      return { rate: null, count: 0, engines: [], pairs: [] };
+    }
+    return pageMatchRate(ocrByKind, page.filename, OCR_TABS);
+  }, [ocrByKind, page]);
+
+  const pageQualityLabel = useMemo(() => {
+    const raw = (imagingPage?.pageQualityTag || "").trim().toLowerCase();
+    if (raw === "high" || raw === "medium" || raw === "low") {
+      return raw.charAt(0).toUpperCase() + raw.slice(1);
+    }
+    return null;
+  }, [imagingPage]);
+
+  const canUseFull = isUsableOcrPayload(ocrFullText);
+  const pageCount = folder?.pages.length ?? 0;
+  const folderName = folder?.name ?? folderId;
+  const suffix = KIND_FILE_SUFFIX[ocrTab];
+
+  function changeMode(mode: OutputMode) {
+    if (mode === outputMode) return;
+    guardLeave(() => {
+      if (mode === "imaging" && !imagingDoc && !imagingError) {
+        setLoadingImaging(true);
+      }
+      if (mode === "ocr" && ocrByKind[ocrTab] === undefined) {
+        setLoadingOcr(true);
+      }
+      setOutputMode(mode);
+      onModeChange?.(mode);
+    });
+  }
+
+  function openImagingTab(next: ImagingTab) {
+    if (next === imagingTab) return;
+    if (imagingTab === "page") {
+      guardLeave(() => setImagingTab(next));
+      return;
+    }
+    setImagingTab(next);
+  }
+
+  async function acceptLeave() {
+    if (!pendingLeave) return;
+    setLeaveBusy(true);
+    const ok = await (groundTruthLeave.current?.accept() ?? Promise.resolve(true));
+    setLeaveBusy(false);
+    if (!ok) return;
+    const run = pendingLeave;
+    setPendingLeave(null);
+    run();
+  }
+
+  function discardLeave() {
+    groundTruthLeave.current?.discard();
+    const run = pendingLeave;
+    setPendingLeave(null);
+    run?.();
+  }
+
+  const guardLeaveRef = useRef(guardLeave);
+  guardLeaveRef.current = guardLeave;
+  useEffect(() => {
+    onBindLeave?.((run) => guardLeaveRef.current(run));
+    return () => onBindLeave?.(null);
+  }, [onBindLeave]);
+
+  useEffect(() => {
+    if (!pendingLeave) return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setPendingLeave(null);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [pendingLeave]);
+
+  function downloadFullOcr() {
+    if (!canUseFull) return;
+    downloadTextFile(`${folderName}_${suffix}.txt`, ocrFullText);
+  }
+
+  async function copyFullOcr() {
+    if (!canUseFull) return;
+    try {
+      await navigator.clipboard.writeText(ocrFullText);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  function downloadImagingDocJson() {
+    if (!displayImagingDoc) return;
+    const status =
+      displayImagingDoc.verifications?.[0]?.finalStatus ??
+      displayImagingDoc.verification?.finalStatus ??
+      "";
+    const pages = fillDocDosForDownload(displayImagingDoc.pages).map((p) => ({
+      chartName: folderName,
+      pageName: p.fileName,
+      memberName: p.memberName,
+      memberID: p.memberId,
+      confidence: p.memberConfidence,
+      memberDob: p.memberDob,
+      handwrittenOrPrinted: p.handwrittenOrPrinted,
+      handwrittenOrPrintedConfidence: p.handwrittenOrPrintedConfidence ?? null,
+      documentType: p.documentType ?? null,
+      isVisible: p.isVisible ?? null,
+      handwrittenAreaPct: p.handwrittenAreaPct ?? null,
+      orientationAngle: p.orientationAngle,
+      tiltAngle: p.tiltAngle,
+      mirrored: p.mirrored,
+      pageQualityTag: p.pageQualityTag ?? null,
+      pageQualityConfidence: p.pageQualityConfidence,
+      blankOrJunk: p.blankOrJunk ?? null,
+      isDuplicate: p.isDuplicate ?? null,
+      pageType: p.pageType,
+      pageTypeConfidence: p.pageTypeConfidence,
+      isCodeable: p.isCodeable ?? null,
+      currentSequence: p.currentSequence ?? p.pageNumber,
+      actualSequence: p.actualSequence ?? null,
+      encounterType: p.encounterType ?? null,
+      dosFrom: p.docDosFrom ?? p.dosFrom,
+      dosTo: p.docDosTo ?? p.dosTo,
+      dosConfidence: p.dosConfidence ?? null,
+      member_verification_status: status,
+    }));
+    downloadJsonFile(`${folderName}_imaging.json`, pages);
+  }
+
+  function downloadImagingDocCsv() {
+    if (!displayImagingDoc) return;
+    const headers = [
+      "chartName",
+      "pageName",
+      "memberName",
+      "memberID",
+      "confidence",
+      "memberDob",
+      "handwrittenOrPrinted",
+      "handwrittenOrPrintedConfidence",
+      "documentType",
+      "isVisible",
+      "handwrittenAreaPct",
+      "orientationAngle",
+      "tiltAngle",
+      "mirrored",
+      "pageQualityTag",
+      "pageQualityConfidence",
+      "blankOrJunk",
+      "isDuplicate",
+      "pageType",
+      "pageTypeConfidence",
+      "isCodeable",
+      "currentSequence",
+      "actualSequence",
+      "encounterType",
+      "dosFrom",
+      "dosTo",
+      "dosConfidence",
+      "member_verification_status",
+    ];
+    const esc = (v: unknown) => {
+      const s = v === null || v === undefined ? "" : String(v);
+      if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    };
+    const status =
+      displayImagingDoc.verifications?.[0]?.finalStatus ??
+      displayImagingDoc.verification?.finalStatus ??
+      "";
+    const rows = fillDocDosForDownload(displayImagingDoc.pages).map((p) =>
+      [
+        folderName,
+        p.fileName,
+        p.memberName,
+        p.memberId,
+        p.memberConfidence,
+        p.memberDob,
+        p.handwrittenOrPrinted,
+        p.handwrittenOrPrintedConfidence ?? "",
+        p.documentType ?? "",
+        p.isVisible ?? "",
+        p.handwrittenAreaPct ?? "",
+        p.orientationAngle,
+        p.tiltAngle,
+        p.mirrored,
+        p.pageQualityTag ?? "",
+        p.pageQualityConfidence,
+        p.blankOrJunk ?? "NA",
+        p.isDuplicate == null
+          ? "NA"
+          : formatDuplicateDownload(p.isDuplicate, p.pageTypeConfidence, p.duplicateOf, p.isPartialDuplicate),
+        p.pageType ?? "Not Available",
+        p.pageTypeConfidence,
+        p.isCodeable ?? "",
+        p.currentSequence ?? p.pageNumber,
+        p.actualSequence ?? "",
+        p.encounterType ?? "",
+        p.docDosFrom ?? p.dosFrom,
+        p.docDosTo ?? p.dosTo,
+        p.dosConfidence ?? "",
+        status,
+      ]
+        .map(esc)
+        .join(","),
+    );
+    downloadTextFile(
+      `${folderName}_imaging.csv`,
+      [headers.join(","), ...rows].join("\n"),
+      "text/csv;charset=utf-8",
+    );
+  }
+
+  function zoomBy(delta: number) {
+    setZoom((z) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round((z + delta) * 100) / 100)));
+  }
+
+  function keepSavedGroundTruth(pageNumber: number, fileName: string, groundTruth: PageGroundTruth) {
+    setImagingDoc((doc) => {
+      if (!doc) return doc;
+      return {
+        ...doc,
+        pages: doc.pages.map((row) =>
+          row.pageNumber === pageNumber && row.fileName === fileName
+            ? { ...row, groundTruth }
+            : row,
+        ),
+      };
+    });
+  }
+
+  async function toggleFullscreen() {
+    const el = pageStageRef.current;
+    if (!el) return;
+    try {
+      if (document.fullscreenElement === el) {
+        await document.exitFullscreen();
+      } else {
+        setZoom(1);
+        resetPan();
+        await el.requestFullscreen();
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function exitFullscreen() {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+    }
+  }
+
+  usePageViewerHotkeys({
+    enabled: pageCount > 0,
+    pageCount,
+    setPageIndex: goToPage,
+    zoomBy,
+    setZoom,
+    zoomStep: ZOOM_STEP,
+    isFullscreen,
+    onExitFullscreen: exitFullscreen,
+  });
+
+  return (
+    <div className="workspace">
+      {showBootOverlay ? (
+        <div className="chart-boot-overlay" role="status" aria-live="polite" aria-busy="true">
+          <div className="chart-boot-card">
+            <span className="imaging-loading-spinner chart-boot-spinner" aria-hidden="true" />
+            <p className="chart-boot-title">Loading results…</p>
+            <p className="chart-boot-sub">{folder?.name ?? folderId}</p>
+          </div>
+        </div>
+      ) : null}
+      <div className="workspace-header">
+        <div className="workspace-header-start">
+          <button type="button" className="back-btn" onClick={() => guardLeave(onBack)}>
+            <ArrowLeft size={15} aria-hidden="true" />
+            Back
+          </button>
+          {findNextChart && onOpenNext ? (
+            <button
+              type="button"
+              className="back-btn"
+              disabled={!nextChart}
+              title={
+                nextChart === undefined
+                  ? "Finding the next chart…"
+                  : nextChart
+                    ? `Next chart: ${nextChart.name}`
+                    : "This is the last chart in the list"
+              }
+              onClick={() => {
+                if (nextChart) guardLeave(() => onOpenNext(nextChart.id));
+              }}
+            >
+              Next
+              <ArrowRight size={15} aria-hidden="true" />
+            </button>
+          ) : null}
+          <div className="workspace-title">
+            <h1>{folder?.name ?? folderId}</h1>
+            <p>
+              {loadingFolder
+                ? "Loading…"
+                : `${pageCount} page${pageCount === 1 ? "" : "s"} · OCR ${folder?.ocr_processed ?? 0} · Imaging ${folder?.imaging_processed ?? 0}`}
+            </p>
+          </div>
+        </div>
+
+        <div className="mode-icon-group" role="group" aria-label="Output mode">
+          <button
+            type="button"
+            className={`mode-icon-btn${outputMode === "ocr" ? " active" : ""}`}
+            onClick={() => changeMode("ocr")}
+            title="OCR"
+            aria-label="OCR output"
+            aria-pressed={outputMode === "ocr"}
+          >
+            <FileText size={18} aria-hidden="true" />
+            <span>OCR</span>
+          </button>
+          <button
+            type="button"
+            className={`mode-icon-btn${outputMode === "imaging" ? " active" : ""}`}
+            onClick={() => changeMode("imaging")}
+            title="Imaging"
+            aria-label="Imaging output"
+            aria-pressed={outputMode === "imaging"}
+          >
+            <ScanSearch size={18} aria-hidden="true" />
+            <span>Imaging</span>
+          </button>
+        </div>
+      </div>
+
+      {error && <div className="error-banner">{error}</div>}
+
+      {!error && (
+        <div className={`review-split${outputExpanded ? " output-expanded" : ""}`}>
+          {!outputExpanded && (
+          <section className="pane" aria-label="Page viewer">
+            {imagesFailed ? (
+              <div className="image-retry-bar" role="status">
+                <span>
+                  Page images could not be loaded
+                  {imageFailReason ? `: ${imageFailReason}` : ""}. The other details are shown without them.
+                </span>
+                <button type="button" onClick={retryImages} disabled={retryingImages}>
+                  {retryingImages ? "Retrying…" : "Retry images"}
+                </button>
+              </div>
+            ) : null}
+            <div className="pane-header">
+              <h2>Page{page ? ` · ${page.filename}` : ""}</h2>
+              <div className="page-toolbar">
+                <div className="zoom-controls" role="group" aria-label="Zoom">
+                  <button
+                    type="button"
+                    onClick={() => zoomBy(-ZOOM_STEP)}
+                    disabled={zoom <= ZOOM_MIN}
+                    aria-label="Zoom out"
+                    title="Zoom out"
+                  >
+                    <ZoomOut size={15} />
+                  </button>
+                  <button
+                    type="button"
+                    className="zoom-reset"
+                    onClick={resetZoom}
+                    title="Reset zoom"
+                  >
+                    {Math.round(zoom * 100)}%
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => zoomBy(ZOOM_STEP)}
+                    disabled={zoom >= ZOOM_MAX}
+                    aria-label="Zoom in"
+                    title="Zoom in"
+                  >
+                    <ZoomIn size={15} />
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  className="fullscreen-btn"
+                  onClick={() => void toggleFullscreen()}
+                  aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+                  title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+                >
+                  {isFullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+                </button>
+                <div className="pager-nav">
+                  <button
+                    type="button"
+                    disabled={pageIndex <= 0}
+                    onClick={() => goToPage((i) => Math.max(0, i - 1))}
+                    aria-label="Previous page"
+                  >
+                    <ChevronLeft size={16} />
+                  </button>
+                  <PageJump
+                    pageIndex={pageIndex}
+                    pageCount={pageCount}
+                    onJump={(idx) => goToPage(idx)}
+                  />
+                  <button
+                    type="button"
+                    disabled={pageIndex >= pageCount - 1}
+                    onClick={() => goToPage((i) => Math.min(pageCount - 1, i + 1))}
+                    aria-label="Next page"
+                  >
+                    <ChevronRight size={16} />
+                  </button>
+                </div>
+                <div className="viewer-menu" ref={viewMenuRef}>
+                  <button
+                    type="button"
+                    className={`fullscreen-btn${viewMenuOpen ? " active" : ""}`}
+                    aria-label="Page view options"
+                    aria-expanded={viewMenuOpen}
+                    aria-haspopup="menu"
+                    onClick={() => setViewMenuOpen((open) => !open)}
+                  >
+                    <Menu size={15} />
+                  </button>
+                  {viewMenuOpen ? (
+                    <div className="viewer-menu-panel" role="menu">
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={showCorrected}
+                          onChange={() => setShowCorrected((on) => !on)}
+                        />
+                        Show Corrected Images
+                      </label>
+                      {showCorrected ? (
+                        <div className="viewer-menu-key" aria-label="Corrected page marks">
+                          <span><i className="key-swatch key-orient" /> Orientation corrected</span>
+                          <span><i className="key-swatch key-tilt" /> Tilt corrected</span>
+                        </div>
+                      ) : null}
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={highlightBlankJunk}
+                          onChange={() => setHighlightBlankJunk((on) => !on)}
+                        />
+                        Highlight Blank/Junk
+                      </label>
+                      {highlightBlankJunk ? (
+                        <div className="viewer-menu-key" aria-label="Blank/Junk highlight colours">
+                          <span><i className="key-swatch key-bj-both" /> Pipeline + ground truth</span>
+                          <span><i className="key-swatch key-bj-ours" /> Pipeline only</span>
+                          <span><i className="key-swatch key-bj-truth" /> Ground truth only</span>
+                          <span><i className="key-swatch key-duplicate" /> Duplicate</span>
+                        </div>
+                      ) : null}
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={highlightDuplicate}
+                          onChange={() => setHighlightDuplicate((on) => !on)}
+                        />
+                        Highlight Duplicate
+                      </label>
+                      {highlightDuplicate ? (
+                        <div className="viewer-menu-key" aria-label="Duplicate highlight colour">
+                          <span><i className="key-swatch key-duplicate" /> Duplicate</span>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+            <div
+              className={`page-stage${isFullscreen ? " is-fullscreen" : ""}${stageClassName ? ` ${stageClassName}` : ""}`}
+              ref={pageStageRef}
+              {...stageProps}
+            >
+              {page ? (
+                <>
+                  {pageImageLoading && !fittedImageSize ? (
+                    <div className="ocr-loading page-image-loading" aria-live="polite">
+                      Loading page…
+                    </div>
+                  ) : null}
+                  <div
+                    className="page-image-wrap"
+                    style={{
+                      ...(fittedImageSize
+                        ? { width: fittedImageSize.w, height: fittedImageSize.h }
+                        : { visibility: "hidden", width: 1, height: 1 }),
+                      ...imageStyle,
+                    }}
+                    onPointerDown={stageProps.onPointerDown}
+                  >
+                    <img
+                      ref={pageImageRef}
+                      className="page-image"
+                      src={pageImageUrl(folderId, page.page_number, { corrected: useCorrected })}
+                      alt={page.filename}
+                      draggable={false}
+                      onLoad={(e) => {
+                        const img = e.currentTarget;
+                        setPageImageLoading(false);
+                        setImageNaturalSize({
+                          w: img.naturalWidth,
+                          h: img.naturalHeight,
+                        });
+                      }}
+                      onError={(e) => {
+                        setPageImageLoading(false);
+                        imageFailed(e.currentTarget.src);
+                      }}
+                    />
+                    {overlayBoxes.length > 0 && fittedImageSize ? (
+                      <div className="page-header-overlay" aria-hidden="true">
+                        {overlayBoxes.map((box, i) => (
+                          <div
+                            key={`${box.text}-${i}`}
+                            className={`page-header-box${headerTier(box)}`}
+                            title={box.text}
+                            style={{
+                              left: `${box.left * 100}%`,
+                              top: `${box.top * 100}%`,
+                              width: `${box.width * 100}%`,
+                              height: `${Math.max(box.height * 100, 0.35)}%`,
+                            }}
+                          />
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                </>
+              ) : (
+                <div className="ocr-empty">
+                  {loadingFolder ? "Loading pages…" : "No pages in this chart"}
+                </div>
+              )}
+              {isFullscreen ? (
+                <FullscreenPageChrome
+                  pageIndex={pageIndex}
+                  pageCount={pageCount}
+                  zoom={zoom}
+                  zoomMin={ZOOM_MIN}
+                  zoomMax={ZOOM_MAX}
+                  label={page?.filename}
+                  onZoomOut={() => zoomBy(-ZOOM_STEP)}
+                  onZoomIn={() => zoomBy(ZOOM_STEP)}
+                  onZoomReset={resetZoom}
+                  onPrev={() => goToPage((i) => Math.max(0, i - 1))}
+                  onNext={() => goToPage((i) => Math.min(pageCount - 1, i + 1))}
+                  onJump={(idx) => goToPage(idx)}
+                  onExitFullscreen={exitFullscreen}
+                />
+              ) : null}
+              {isFullscreen ? (
+                // Inside the fullscreen element, or it would not show. Pointer and
+                // wheel stop here so scrolling or clicking the table never pans the page.
+                <aside
+                  className={`fullscreen-results${fsResultsOpen ? " is-open" : ""}`}
+                  aria-label="Page results"
+                  title=""
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onWheel={(e) => e.stopPropagation()}
+                >
+                  <button
+                    type="button"
+                    className="fullscreen-results-toggle"
+                    onClick={() => setFsResultsOpen((v) => !v)}
+                    aria-expanded={fsResultsOpen}
+                    title={fsResultsOpen ? "Hide page results" : "Show page results"}
+                  >
+                    {fsResultsOpen ? (
+                      <PanelRightClose size={15} aria-hidden="true" />
+                    ) : (
+                      <PanelRightOpen size={15} aria-hidden="true" />
+                    )}
+                    <span>Results</span>
+                  </button>
+                  {fsResultsOpen ? (
+                    <div className="fullscreen-results-body">
+                      <ImagingPanel
+                        tab="page"
+                        compact
+                        loading={loadingFolder || loadingImaging || (!imagingDoc && !imagingError)}
+                        error={imagingError}
+                        document={displayImagingDoc}
+                        currentPage={imagingPage}
+                        currentFileName={page?.filename ?? null}
+                        extraction={extraction}
+                        onGroundTruthSaved={keepSavedGroundTruth}
+                      />
+                    </div>
+                  ) : null}
+                </aside>
+              ) : null}
+            </div>
+            {bootDone && folder && folder.pages.length > 0 && (
+              <div className="filmstrip" role="listbox" aria-label="Page thumbnails">
+                {folder.pages.map((p, idx) => {
+                  const marks = pageMarkClass(findImagingPage(displayImagingDoc, p));
+                  return (
+                  <button
+                    key={p.filename}
+                    type="button"
+                    className={`filmstrip-thumb${idx === pageIndex ? " active" : ""}${marks ? ` ${marks}` : ""}`}
+                    onClick={() => goToPage(idx)}
+                    aria-label={`Go to ${p.filename}`}
+                    aria-selected={idx === pageIndex}
+                    title={p.filename}
+                  >
+                    <img
+                      src={pageImageUrl(folderId, p.page_number, {
+                        thumb: true,
+                        corrected:
+                          useCorrected &&
+                          pageNeedsCorrection(findImagingPage(imagingDoc, p)),
+                      })}
+                      alt=""
+                      loading="lazy"
+                      decoding="async"
+                      onError={(e) => imageFailed(e.currentTarget.src)}
+                    />
+                  </button>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+          )}
+
+          <section className="pane" aria-label="Output panel">
+            <div className="pane-header pane-header-wrap">
+              <div className="pane-header-main">
+                <button
+                  type="button"
+                  className="pane-expand-btn"
+                  onClick={() => setOutputExpanded((v) => !v)}
+                  title={
+                    outputExpanded
+                      ? "Show page viewer"
+                      : "Expand output to full width"
+                  }
+                  aria-label={
+                    outputExpanded
+                      ? "Show page viewer"
+                      : "Expand output to full width"
+                  }
+                  aria-pressed={outputExpanded}
+                >
+                  {outputExpanded ? (
+                    <PanelLeftOpen size={16} aria-hidden="true" />
+                  ) : (
+                    <PanelLeftClose size={16} aria-hidden="true" />
+                  )}
+                </button>
+                <h2>
+                  {outputMode === "ocr" ? "OCR Output" : "Imaging Output"}
+                  {page && outputMode === "ocr" ? (
+                    <span className="ocr-page-label"> · {page.filename}</span>
+                  ) : null}
+                </h2>
+              </div>
+              {outputMode === "ocr" && (
+                <div className="ocr-toolbar-row">
+                  <div className="output-tabs" role="tablist" aria-label="OCR views">
+                    {OCR_TABS.map((kind) => (
+                      <button
+                        key={kind}
+                        type="button"
+                        role="tab"
+                        aria-selected={ocrTab === kind}
+                        className={ocrTab === kind ? "active" : ""}
+                        onClick={() => setOcrTab(kind)}
+                        // Tabs load on click, so an unfetched kind (undefined)
+                        // must stay clickable; grey out only a fetched-empty one.
+                        disabled={loadingOcr ? false : ocrByKind[kind] === ""}
+                        title={
+                          ocrByKind[kind] === ""
+                            ? `${OCR_TAB_LABELS[kind]} unavailable`
+                            : OCR_TAB_LABELS[kind]
+                        }
+                      >
+                        {OCR_TAB_LABELS[kind]}
+                      </button>
+                    ))}
+                  </div>
+                  <div
+                    className={`ocr-match-rate ${
+                      loadingOcr ? "is-na" : matchRateToneClass(ocrMatch.rate)
+                    }`}
+                    title={matchRateTitle(ocrMatch)}
+                    aria-label={`OCR match rate ${formatMatchRatePercent(ocrMatch.rate)}`}
+                  >
+                    <span className="ocr-match-label">Match rate</span>
+                    <span className="ocr-match-value">
+                      {loadingOcr ? "…" : formatMatchRatePercent(ocrMatch.rate)}
+                    </span>
+                    {!loadingOcr && ocrMatch.count > 0 ? (
+                      <span className="ocr-match-engines">
+                        ({ocrMatch.count}{" "}
+                        {ocrMatch.count === 1 ? "Method" : "Methods"})
+                      </span>
+                    ) : null}
+                  </div>
+                  <div
+                    className={`ocr-quality-badge ${
+                      pageQualityLabel
+                        ? `is-${pageQualityLabel.toLowerCase()}`
+                        : "is-na"
+                    }`}
+                    title={
+                      pageQualityLabel
+                        ? `Page quality from imaging analysis: ${pageQualityLabel}`
+                        : "Page quality not available"
+                    }
+                    aria-label={`Quality ${pageQualityLabel ?? "NA"}`}
+                  >
+                    <span className="ocr-quality-label">Quality</span>
+                    <span className="ocr-quality-value">
+                      {loadingImaging && !pageQualityLabel
+                        ? "…"
+                        : pageQualityLabel ?? "NA"}
+                    </span>
+                  </div>
+                  {showHeaderToggle ? (
+                    <label className="ocr-section-headers-toggle">
+                      <input
+                        type="checkbox"
+                        checked={showSectionHeaders}
+                        onChange={(e) => setShowSectionHeaders(e.target.checked)}
+                      />
+                      Show Headers
+                    </label>
+                  ) : null}
+                </div>
+              )}
+              {outputMode === "imaging" && (
+                <div className="output-tabs" role="tablist" aria-label="Imaging views">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={imagingTab === "page"}
+                    className={imagingTab === "page" ? "active" : ""}
+                    onClick={() => openImagingTab("page")}
+                  >
+                    Page Details
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={imagingTab === "encounter"}
+                    className={imagingTab === "encounter" ? "active" : ""}
+                    onClick={() => openImagingTab("encounter")}
+                  >
+                    Encounter
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={imagingTab === "sequencing"}
+                    className={imagingTab === "sequencing" ? "active" : ""}
+                    onClick={() => openImagingTab("sequencing")}
+                  >
+                    Sequencing
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={imagingTab === "doc"}
+                    className={imagingTab === "doc" ? "active" : ""}
+                    onClick={() => openImagingTab("doc")}
+                  >
+                    Doc Summary
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={imagingTab === "additional"}
+                    className={imagingTab === "additional" ? "active" : ""}
+                    onClick={() => openImagingTab("additional")}
+                  >
+                    Additional
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="ocr-panel" role="tabpanel">
+              {outputMode === "imaging" ? (
+                <ImagingPanel
+                  tab={imagingTab}
+                  loading={
+                    loadingFolder ||
+                    loadingImaging ||
+                    (!imagingDoc && !imagingError)
+                  }
+                  error={imagingError}
+                  document={displayImagingDoc}
+                  shellManifest={folder?.manifest ?? null}
+                  currentPage={imagingPage}
+                  currentFileName={page?.filename ?? null}
+                  sectionHeaders={imagingSectionInfo.headers}
+                  sectionHeadersSource={imagingSectionInfo.source}
+                  sectionHeadersSkipped={imagingSectionInfo.skipped}
+                  sectionHeadersLoading={loadingOcr}
+                  imageNaturalSize={imageNaturalSize}
+                  extraction={extraction}
+                  headerHighlight={headerHighlight}
+                  onHeaderHighlight={setHeaderHighlight}
+                  groundTruthLeave={groundTruthLeave}
+                  onGroundTruthSaved={keepSavedGroundTruth}
+                />
+              ) : loadingOcr ? (
+                <div className="ocr-loading">Loading OCR output…</div>
+              ) : pageOcrLines ? (
+                <div className="ocr-formatted" aria-label="OCR text">
+                  {pageOcrLines.map((line, i) => {
+                    if (line.kind === "heading") {
+                      return (
+                        <div
+                          key={i}
+                          className={`ocr-line ocr-heading ocr-heading-h${Math.min(line.level, 3)}`}
+                        >
+                          {line.text}
+                        </div>
+                      );
+                    }
+                    return (
+                      <div key={i} className="ocr-line ocr-text">
+                        {line.text || "\u00a0"}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <pre>{pageOcrText || "No OCR text for this page."}</pre>
+              )}
+            </div>
+            {outputMode === "ocr" && (
+              <div className="ocr-panel-footer">
+                <button
+                  type="button"
+                  className="ocr-footer-btn"
+                  disabled={loadingOcr || !canUseFull}
+                  onClick={() => void copyFullOcr()}
+                  title={`Copy full ${OCR_TAB_LABELS[ocrTab]} text`}
+                >
+                  <Copy size={14} aria-hidden="true" />
+                  {copied ? "Copied" : "Copy"}
+                </button>
+                <button
+                  type="button"
+                  className="ocr-footer-btn primary"
+                  disabled={loadingOcr || !canUseFull}
+                  onClick={downloadFullOcr}
+                  title={`Download full ${OCR_TAB_LABELS[ocrTab]} file`}
+                >
+                  <Download size={14} aria-hidden="true" />
+                  Download
+                </button>
+              </div>
+            )}
+            {outputMode === "imaging" && (
+              <div className="ocr-panel-footer">
+                <button
+                  type="button"
+                  className="ocr-footer-btn"
+                  disabled={loadingImaging || !imagingDoc}
+                  onClick={downloadImagingDocCsv}
+                  title="Download document imaging as CSV"
+                >
+                  <Download size={14} aria-hidden="true" />
+                  Document CSV
+                </button>
+                <button
+                  type="button"
+                  className="ocr-footer-btn primary"
+                  disabled={loadingImaging || !imagingDoc}
+                  onClick={downloadImagingDocJson}
+                  title="Download document imaging as JSON"
+                >
+                  <Download size={14} aria-hidden="true" />
+                  Document JSON
+                </button>
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+      {pendingLeave ? (
+        <div className="modal-backdrop" role="presentation">
+          <div
+            className="modal-card"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="gt-leave-title"
+          >
+            <h2 id="gt-leave-title" className="gt-leave-title">Unsaved ground truth</h2>
+            <p className="gt-leave-copy">
+              These changes have not been saved.
+            </p>
+            <div className="gt-leave-actions">
+              <button type="button" className="gt-leave-btn primary" disabled={leaveBusy} onClick={() => void acceptLeave()}>
+                Save
+              </button>
+              <button type="button" className="gt-leave-btn" disabled={leaveBusy} onClick={discardLeave}>
+                Discard
+              </button>
+              <button type="button" className="gt-leave-btn" disabled={leaveBusy} onClick={() => setPendingLeave(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
