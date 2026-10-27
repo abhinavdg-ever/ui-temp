@@ -49,6 +49,8 @@ services:
       BLOB_SAS_TOKEN: ${BLOB_SAS_TOKEN:-}
       # No Playground: the client cannot start pipeline runs, whatever .env says.
       CORE_PIPELINE_URLS: ""
+      # Page Details shows only the Final values, headed Algorithm.
+      CLIENT_VIEW: "true"
     volumes:
       # Empty folders: Local mode (top bar) shows nothing.
       - ./data/empty:/data/folders:ro

@@ -5,6 +5,9 @@ Review, served on **port 5001** (API on 5000). It reads its own Postgres databas
 `imaging_outputs_client`, which holds a copy of the pipeline's outputs and our users,
 and only the client's ground truth.
 
+Page Details shows one result column, **Algorithm** (our Final values), with no
+Extracted column: `CLIENT_VIEW=true`, set in `docker-compose.yml` and `.env.example`.
+
 `backend/` and `frontend/` are copied from `review-ui/` in the main repository by
 `utilities/sync_client_ui.sh`. Make changes there, not here.
 
