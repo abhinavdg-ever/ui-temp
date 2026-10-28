@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, CheckCircle2, RefreshCw } from "lucide-react";
+import { ArrowLeft, CheckCircle2, RefreshCw, RotateCcw, Search } from "lucide-react";
 import PageMessage from "./PageMessage";
 import { errorDetail, getReviewLog, type ReviewLogEntry, type ReviewLogResponse } from "./api";
 import { formatIstPlain } from "./istTime";
@@ -39,6 +39,9 @@ const FIELD_LABELS: Record<string, string> = {
   printed_or_handwritten: "Type (Printed/HW)",
   is_duplicate: "Is Duplicate",
   handwritten_pct: "Handwritten %",
+  member_decision: "Member Decision",
+  member_decision_reason: "Decision Reason",
+  encounter: "Encounter",
 };
 
 type Shown = { label: string; before: string | null; after: string | null };
@@ -137,7 +140,7 @@ export default function ReviewLogView({ onBack, isAdmin, chartHref }: Props) {
       <section className="accuracy-section" aria-label="Review log">
         <div className="review-log-toolbar">
           {isAdmin ? (
-            <label className="review-log-who">
+            <label className="landing-select-wrap">
               <span>User</span>
               <select value={who} onChange={(e) => setWho(e.target.value)}>
                 <option value={SELF}>Me</option>
@@ -150,13 +153,16 @@ export default function ReviewLogView({ onBack, isAdmin, chartHref }: Props) {
               </select>
             </label>
           ) : null}
-          <input
-            className="review-log-search"
-            type="search"
-            placeholder="Search chart, page, field…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
+          <label className="landing-search review-log-search">
+            <Search size={14} aria-hidden="true" />
+            <input
+              type="search"
+              placeholder="Search chart, page, field…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              aria-label="Search the review log"
+            />
+          </label>
           <span className="review-log-count">
             {rows.length} {rows.length === 1 ? "save" : "saves"} · {pages} {pages === 1 ? "page" : "pages"}
           </span>
@@ -172,7 +178,7 @@ export default function ReviewLogView({ onBack, isAdmin, chartHref }: Props) {
           </button>
         </div>
         <p className="accuracy-note">
-          Every ground-truth save, newest first. Times are IST. A field shows its value before → after the save.
+          Every ground-truth save, member decision, encounter save and Reviewed mark (set or cleared), newest first. Times are IST. A field shows its value before → after the save.
         </p>
 
         <div className="landing-history-scroll">
@@ -220,6 +226,10 @@ export default function ReviewLogView({ onBack, isAdmin, chartHref }: Props) {
                         {item.action === "reviewed" ? (
                           <span className="review-log-reviewed">
                             <CheckCircle2 size={13} aria-hidden="true" /> Chart marked Reviewed (ground truth frozen)
+                          </span>
+                        ) : item.action === "review_cleared" ? (
+                          <span className="review-log-cleared">
+                            <RotateCcw size={13} aria-hidden="true" /> Reviewed mark cleared (review enabled)
                           </span>
                         ) : fields.length === 0 ? (
                           <span className="imaging-gt-copied">No change</span>
