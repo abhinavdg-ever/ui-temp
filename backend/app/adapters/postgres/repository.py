@@ -86,7 +86,7 @@ _OVERLAY_SQL: dict[str, str] = {
     "blank_junk": """
                             SELECT p.page_name, b.blank_junk_flag, b.junk_subtype,
                                    b.confidence, orig.page_name,
-                                   -- NULL until changes_2026-10-22.sql has replaced the view.
+                                   -- NULL until migrations/2026-10-22.sql has replaced the view.
                                    to_jsonb(b) ->> 'duplicate_confidence',
                                    b.reason
                             FROM v_page_blank_junk_final b
@@ -99,7 +99,7 @@ _OVERLAY_SQL: dict[str, str] = {
                             SELECT p.page_name,
                                    m.extracted_name, m.extracted_dob, m.extracted_member_id,
                                    m.confidence, m.page_status,
-                                   -- NULL until changes_2026-10-27.sql adds the column.
+                                   -- NULL until migrations/2026-10-27.sql adds the column.
                                    to_jsonb(m) -> 'other_names'
                             FROM member_extraction_results m
                             JOIN chart_list c ON c.id = m.chart_id
@@ -171,7 +171,7 @@ _OVERLAY_SQL: dict[str, str] = {
                                        to_jsonb(f) -> 'signers',
                                        to_jsonb(f) ->> 'provider_version',
                                        to_jsonb(f) ->> 'provider_confidence',
-                                       -- NULL until changes_2026-10-25.sql adds them.
+                                       -- NULL until migrations/2026-10-25.sql adds them.
                                        to_jsonb(f) -> 'confidences',
                                        to_jsonb(f) -> 'review_fields'
                                 FROM imaging_final f
@@ -594,7 +594,7 @@ class PostgresFolderRepository(FolderRepository):
         if local is None:
             raise HTTPException(
                 status_code=404,
-                detail="No local page image; Production Mode serves images from blob",
+                detail="No page image: review-ui serves page images from Azure Blob only",
             )
         return local.get_page_image_path(folder_id, page_number, corrected=corrected)
 
@@ -1175,7 +1175,7 @@ class PostgresFolderRepository(FolderRepository):
 
             with _skip_on_error("dos", folder_id):
                 # DOS (Extracted): the DOS stage's own row per page, the same values it
-                # writes to <chart>_dos.csv. schema/v1.sql is the only schema.
+                # writes to <chart>_dos.csv. schema/schema.sql is the only schema.
                 for page_name, d_from, d_to, doc_from, doc_to, conf in rows["dos"] or []:
                     if str(page_name) in junk_pages:
                         continue

@@ -38,20 +38,12 @@ class FolderSummary(BaseModel):
     source_name: str | None = None
     measure: str | None = None
     rr_method: str | None = None
+    # 2026-11-07 (user): the chart's tags (chart_list.tags, set by utilities/tag_chart.py).
+    tags: list[str] = Field(default_factory=list)
 
 
-class FileViewerFolder(BaseModel):
-    """A chart directory under data/folders that has a pages/ folder."""
-
-    id: str
-    name: str
-    page_count: int = 0
-    has_corrected: bool = False
 
 
-class FileViewerListResponse(BaseModel):
-    items: list[FileViewerFolder]
-    total: int = 0
 
 
 class FolderListResponse(BaseModel):
@@ -71,6 +63,7 @@ class FolderListResponse(BaseModel):
     source_options: list[str] = Field(default_factory=list)
     measure_options: list[str] = Field(default_factory=list)
     retrieval_options: list[str] = Field(default_factory=list)
+    tag_options: list[str] = Field(default_factory=list)
     reviewed_options: list[str] = Field(default_factory=list)
     truth_options: list[str] = Field(default_factory=list)
     limit: int | None = None
@@ -87,8 +80,6 @@ class PageSummary(BaseModel):
     has_imaging: bool = False
 
 
-class FileViewerFolderDetail(FileViewerFolder):
-    pages: list[PageSummary] = Field(default_factory=list)
 
 
 class ImagingManifestDetails(BaseModel):
@@ -550,6 +541,7 @@ class AccuracyChartPayload(BaseModel):
     sourceName: str | None = None
     measure: str | None = None
     rrMethod: str | None = None
+    tags: list[str] = Field(default_factory=list)
     metrics: dict[str, AccuracyTally] | None = None
     overall: AccuracyTally | None = None
     document: ImagingDocumentResponse | None = None

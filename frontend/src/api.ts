@@ -31,6 +31,8 @@ export type FolderSummary = {
   source_name?: string | null;
   measure?: string | null;
   rr_method?: string | null;
+  /** The chart's tags (2026-11-07). */
+  tags?: string[];
 };
 
 export type FolderListParams = {
@@ -46,6 +48,8 @@ export type FolderListParams = {
   measure?: string[];
   /** RR Method. */
   retrieval?: string[];
+  /** Chart tags: any of these ("(Blank)" = no tag). */
+  tag?: string[];
   /** Reviewed / Not Reviewed. */
   reviewed?: string[];
   /** With / No Ground Truth. */
@@ -54,22 +58,6 @@ export type FolderListParams = {
   run_after?: string | null;
   sort?: "filename" | "pages" | "updated";
   sort_dir?: "asc" | "desc";
-};
-
-export type FileViewerFolder = {
-  id: string;
-  name: string;
-  page_count: number;
-  has_corrected: boolean;
-};
-
-export type FileViewerListResponse = {
-  items: FileViewerFolder[];
-  total: number;
-};
-
-export type FileViewerFolderDetail = FileViewerFolder & {
-  pages: PageSummary[];
 };
 
 export type FolderListResponse = {
@@ -87,6 +75,7 @@ export type FolderListResponse = {
   source_options?: string[];
   measure_options?: string[];
   retrieval_options?: string[];
+  tag_options?: string[];
   reviewed_options?: string[];
   truth_options?: string[];
   limit: number | null;
@@ -373,6 +362,7 @@ export type BlobAuthMode = "entra" | "sas";
 
 export type AppConfig = {
   /** The mode this browser is in: its Local / DB switch, else DATA_MODE. */
+  /** Always "production": the database is the only source (2026-11-07). */
   data_mode: string;
   /** A database is configured, so the DB side of the switch is offered. */
   db_available?: boolean;
@@ -636,6 +626,7 @@ export function listFolders(params?: FolderListParams): Promise<FolderListRespon
   for (const s of params?.source ?? []) sp.append("source", s);
   for (const s of params?.measure ?? []) sp.append("measure", s);
   for (const s of params?.retrieval ?? []) sp.append("retrieval", s);
+  for (const s of params?.tag ?? []) sp.append("tag", s);
   for (const s of params?.reviewed ?? []) sp.append("reviewed", s);
   for (const s of params?.truth ?? []) sp.append("truth", s);
   if (params?.run_after) sp.set("run_after", params.run_after);
@@ -643,23 +634,6 @@ export function listFolders(params?: FolderListParams): Promise<FolderListRespon
   if (params?.sort_dir) sp.set("sort_dir", params.sort_dir);
   const qs = sp.toString();
   return api(`/api/folders${qs ? `?${qs}` : ""}`);
-}
-
-export function listFileViewerFolders(): Promise<FileViewerListResponse> {
-  return api("/api/file-viewer/folders");
-}
-
-export function getFileViewerFolder(folderId: string): Promise<FileViewerFolderDetail> {
-  return api(`/api/file-viewer/folders/${encodeURIComponent(folderId)}`);
-}
-
-export function fileViewerPageImageUrl(
-  folderId: string,
-  pageNumber: number,
-  corrected = false,
-): string {
-  const base = `/api/file-viewer/folders/${encodeURIComponent(folderId)}/pages/${pageNumber}/image`;
-  return corrected ? `${base}?corrected=1` : base;
 }
 
 export function getFolder(folderId: string): Promise<FolderDetail> {
@@ -733,6 +707,7 @@ export type AccuracyChartPayload = {
   sourceName?: string | null;
   measure?: string | null;
   rrMethod?: string | null;
+  tags?: string[];
   metrics?: Record<string, { correct: number; wrong: number; scored: number }> | null;
   overall?: { correct: number; wrong: number; scored: number } | null;
   document?: ImagingDocumentResponse | null;
@@ -906,10 +881,6 @@ export async function retryPageImages(): Promise<string> {
   } catch {
     return "";
   }
-}
-
-export function blobPageImageUrl(folderId: string, pageNumber: number): string {
-  return `/api/blob/${encodeURIComponent(folderId)}/pages/${pageNumber}/image`;
 }
 
 /** UNVALIDATED: matched on PDF ID + Page Number with no field to compare --

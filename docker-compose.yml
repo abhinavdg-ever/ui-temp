@@ -19,12 +19,7 @@ services:
     env_file:
       - ./.env
     environment:
-      # Postgres only: the client never sees our disk workspace.
-      DATA_MODE: production
-      DATA_ROOT: /data/folders
-      METADATA_ROOT: /data/metadata
-      PIPELINE_ROOT: /data/pipeline
-      MONOREPO_ROOT: /data/pipeline
+      # review-ui reads only the database and Azure Blob (there is no Local mode).
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://172.20.4.170:5001,http://localhost:5001}
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://USER:PASSWORD@HOST:5432/imaging_outputs_client}
       DB_SCHEMA: ${DB_SCHEMA:-public}
@@ -33,8 +28,6 @@ services:
       DB_POOL_MIN: ${DB_POOL_MIN:-12}
       DB_POOL_MAX: ${DB_POOL_MAX:-16}
       DB_POOL_WAIT_SEC: ${DB_POOL_WAIT_SEC:-10}
-      LOCAL_CACHE_TTL_SECONDS: ${LOCAL_CACHE_TTL_SECONDS:-5}
-      FILE_VIEWER_BLOB_ENABLED: ${FILE_VIEWER_BLOB_ENABLED:-false}
       # Page images: the same Azure Blob settings as our review-ui/.env.
       AZURE_STORAGE_AUTH: ${AZURE_STORAGE_AUTH:-entra}
       AZURE_STORAGE_ACCOUNT_NAME: ${AZURE_STORAGE_ACCOUNT_NAME:-}
@@ -54,10 +47,6 @@ services:
       # Page Details shows only the Final values, headed Algorithm.
       CLIENT_VIEW: "true"
     volumes:
-      # Empty folders: Local mode (top bar) shows nothing.
-      - ./data/empty:/data/folders:ro
-      - ./data/empty:/data/pipeline:ro
-      - ./data/empty:/data/metadata:ro
       # Optional: MiniLM for the accuracy report's semantic page-type match.
       - ${SEMANTIC_MODEL_HOST_PATH:-./data/empty}:/models/semantic-model:ro
     restart: unless-stopped
