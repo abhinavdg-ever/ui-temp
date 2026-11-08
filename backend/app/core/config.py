@@ -21,6 +21,14 @@ class Settings(BaseSettings):
 
     # Always "production": results from the database, page images from Azure Blob.
     data_mode: DataMode = "production"
+    # postgres (today) | cosmos | both (read Postgres while both are written). cosmos reads
+    # the chart views (folder, page images, OCR, imaging) from Cosmos (store/cosmos/); the
+    # services with their own SQL (ground-truth saves, History, search, ...) still use Postgres.
+    db_backend: Literal["postgres", "cosmos", "both"] = "postgres"
+    # Azure Cosmos DB for NoSQL (DB_BACKEND=cosmos): the database core-pipeline writes.
+    cosmos_endpoint: str = ""
+    cosmos_key: str = ""
+    cosmos_database: str = "imaging"
     # No longer set (2026-11-07): kept so internal helpers that take a folder still construct.
     # Nothing reads the pipeline's chart folders any more.
     data_root: str = "./data/folders"
@@ -99,6 +107,9 @@ class Settings(BaseSettings):
     # off. The only place review-ui calls core-pipeline.
     core_pipeline_urls: str = "VM=http://172.20.4.170:8001,Local=http://localhost:8001"
     playground_container: str = "imaging-pipeline"
+    # Sent as X-API-Key on Playground runs: core-pipeline's ORCHESTRATOR_API_KEY (needed when
+    # core-pipeline has API_KEY_REQUIRED=true). Empty = no header.
+    orchestrator_api_key: str = ""
     # The client's copy (CLIENT_VIEW=true, review-ui-client): Page Details shows only the
     # Final values, headed Algorithm.
     client_view: bool = False

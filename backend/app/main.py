@@ -56,7 +56,13 @@ def _startup() -> None:
     db_on = database_url_usable(settings.database_url)
     logger.info("review-ui starting — database + Azure Blob")
     logger.info("  results     : Postgres %s (schema %s)", _safe_db(settings.database_url), settings.db_schema)
-    if not db_on:
+    if settings.db_backend == "cosmos":
+        logger.warning("  DB_BACKEND=cosmos: every route reads and writes Cosmos (%s); not on Cosmos "
+                       "yet (501): accuracy report, search by value", settings.cosmos_database)
+        db_on = False  # nothing reads Postgres
+    elif settings.db_backend == "both":
+        logger.warning("  DB_BACKEND=both: reading Postgres; review-ui's writes are copied to Cosmos")
+    if not db_on and settings.db_backend != "cosmos":
         logger.warning("  DATABASE_URL is not set: nothing to show")
     logger.info("  page images : Azure Blob")
     logger.info("  account     : %s", resolved_blob_account_url(settings) or "(not set)")
@@ -88,6 +94,7 @@ def root() -> dict[str, str]:
     return {
         "service": "advantmed-imaging-ui",
         "data_mode": settings.data_mode,
+        "db_backend": settings.db_backend,
         "mode_label": settings.mode_label,
         "database": _database_target(),
         "docs": "/docs",

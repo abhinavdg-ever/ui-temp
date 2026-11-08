@@ -60,7 +60,7 @@ export const METRICS: {
   {
     id: "pageType",
     label: "Page Type",
-    rule: "Scored on the pages the ground truth says are not blank / junk. The client's label is mapped to our L1 > L2 > L3 (gtPageTypeCanon.json; the table is docs/gt_page_type_mapping.csv). Match (1): a full target is the start of our Final or Extracted path. Partial (0.5): a listed neighbour is, or our path has the same L1 (stops above the label's level, a sibling L3, another L2). Else No Match (0). Cover / index / fax / blank, NA and Misc labels are not scored. A label not in the mapping falls back to the accepted-label lists. A page the pipeline called blank / junk has the type Blank/Junk: No Match",
+    rule: "Scored on the pages the ground truth says are not blank / junk. The client's label is mapped to our L1 > L2 > L3 (gtPageTypeCanon.json; the table is training/taxonomy/gt_page_type_mapping.csv). Match (1): a full target is the start of our Final or Extracted path. Partial (0.5): a listed neighbour is, or our path has the same L1 (stops above the label's level, a sibling L3, another L2). Else No Match (0). Cover / index / fax / blank, NA and Misc labels are not scored. A label not in the mapping falls back to the accepted-label lists. A page the pipeline called blank / junk has the type Blank/Junk: No Match",
   },
   {
     id: "codeable",
@@ -150,6 +150,18 @@ export type ChartAccuracy = {
   signatureRates: ClassRates;
   /** Class 1 = the ground truth dates the page. */
   dosRates: ClassRates;
+  /** Each scored page's verdicts, for the page-level download. */
+  pages: PageAccuracy[];
+};
+
+/** One page's verdict per metric (null = not scored) and its overall: Match when all seven
+ * streams match, else No Match (``matches`` of seven). */
+export type PageAccuracy = {
+  pageNumber: number;
+  fileName: string;
+  scores: Record<MetricId, Verdict | null>;
+  overall: Verdict | null;
+  matches: number | null;
 };
 
 const EMPTY_SECTIONS: ImagingSectionsProcessed = {
@@ -640,6 +652,7 @@ export function scoreChart(
   const signatureRates: ClassRates = { ...emptyRates(), credCases: 0, credMatch: 0 };
   const dosRates = emptyRates();
   const overall = emptyOverall();
+  const pages: PageAccuracy[] = [];
   for (const raw of doc.pages) {
     if (!hasGroundTruth(raw.groundTruth)) continue;
     const page = asManifestMember(raw, doc.manifest);
@@ -653,6 +666,13 @@ export function scoreChart(
     addPresenceRates(dosRates, scored.dos);
 
     const pageOverall = overallVerdict(scored.scores, scored.applicable);
+    pages.push({
+      pageNumber: raw.pageNumber,
+      fileName: raw.fileName,
+      scores: scored.scores,
+      overall: pageOverall ? (pageOverall.verdict === "yes" ? "yes" : "no") : null,
+      matches: pageOverall ? pageOverall.matches : null,
+    });
     if (pageOverall) {
       add(overall, pageOverall.verdict);
       overall.matched![pageOverall.matches] = (overall.matched![pageOverall.matches] ?? 0) + 1;
@@ -678,7 +698,43 @@ export function scoreChart(
     memberRates,
     signatureRates,
     dosRates,
+    pages,
   };
+}
+
+const VERDICT_TEXT: Record<Verdict, string> = { yes: "Match", maybe: "Partial", no: "No Match" };
+
+function csvCell(value: string | number | null | undefined): string {
+  const text = value == null ? "" : String(value);
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+/** The page-level accuracy CSV (2026-11-08, client): one row per scored page of ``charts``,
+ * each metric Match / No Match (Page Type may be Partial), Not Scored where the metric does
+ * not apply, and the overall (Match = all seven streams match). */
+export function pageAccuracyCsv(charts: ChartAccuracy[]): string {
+  const live = METRICS.filter((metric) => !metric.comingSoon);
+  const header = ["Chart Name", "Run", "Batch", "Page Number", "File Name",
+    ...live.map((metric) => metric.label), "Overall", "Streams Matched"];
+  const lines = [header.map(csvCell).join(",")];
+  for (const chart of charts) {
+    for (const page of [...chart.pages].sort((a, b) => a.pageNumber - b.pageNumber)) {
+      lines.push([
+        chart.chartName,
+        chart.runId ?? "",
+        chart.batchId ?? "",
+        page.pageNumber,
+        page.fileName,
+        ...live.map((metric) => {
+          const verdict = page.scores[metric.id];
+          return verdict ? VERDICT_TEXT[verdict] : "Not Scored";
+        }),
+        page.overall ? VERDICT_TEXT[page.overall] : "Not Scored",
+        page.matches == null ? "" : `${page.matches}/${OVERALL_STREAMS}`,
+      ].map(csvCell).join(","));
+    }
+  }
+  return lines.join("\r\n");
 }
 
 export function sumRates(rows: ClassRates[]): ClassRates {

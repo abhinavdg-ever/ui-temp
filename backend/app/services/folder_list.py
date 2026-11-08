@@ -18,6 +18,7 @@ from typing import Literal, Optional, Sequence
 # Every stage after Final OCR 2 is an imaging stage (the postgres adapter's set).
 from app.store.postgres.repository import IMAGING_STAGES as _IMAGING_STAGES
 from app.core.schemas import FolderSummary, OcrRunStatus
+from app.services import backend
 from app.services.chart_run_batch import (
     db_lookup_enabled,
     database_url_usable,
@@ -182,38 +183,46 @@ def fetch_chart_summaries_from_db(
         return []
 
     out: list[FolderSummary] = []
-    for chart_name, page_count, status, updated_at, current_stage, run_id, batch_id in rows:
-        name = str(chart_name or "").strip()
-        if not name:
-            continue
-        page_n = int(page_count or 0)
-        status_ui = ocr_status_for(status, current_stage)
-        # Approximate progress columns from chart status (no per-page disk scan).
-        imaging_n = page_n if status_ui == "IMAGING_COMPLETED" else 0
-        ocr_n = (
-            page_n
-            if status_ui
-            in {"COMPLETED", "IMAGING_COMPLETED", "IMAGING_IN_PROGRESS", "IN_PROGRESS"}
-            else 0
-        )
-        stored_run, stored_batch = with_run_batch_default(
-            str(run_id) if run_id else None,
-            str(batch_id) if batch_id else None,
-        )
-        out.append(
-            FolderSummary(
-                id=name,
-                name=name,
-                page_count=page_n,
-                ocr_processed=ocr_n,
-                imaging_processed=imaging_n,
-                ocr_status=status_ui,
-                last_updated_at=updated_at,
-                run_id=stored_run,
-                batch_id=stored_batch,
-            )
-        )
+    for row in rows:
+        summary = chart_summary(*row)
+        if summary is not None:
+            out.append(summary)
     return out
+
+
+def chart_summary(
+    chart_name, page_count, status, updated_at, current_stage, run_id, batch_id
+) -> FolderSummary | None:
+    """One landing row from a chart_list row's columns (None when it has no name). The
+    Cosmos repository builds its rows here too."""
+    name = str(chart_name or "").strip()
+    if not name:
+        return None
+    page_n = int(page_count or 0)
+    status_ui = ocr_status_for(status, current_stage)
+    # Approximate progress columns from chart status (no per-page disk scan).
+    imaging_n = page_n if status_ui == "IMAGING_COMPLETED" else 0
+    ocr_n = (
+        page_n
+        if status_ui
+        in {"COMPLETED", "IMAGING_COMPLETED", "IMAGING_IN_PROGRESS", "IN_PROGRESS"}
+        else 0
+    )
+    stored_run, stored_batch = with_run_batch_default(
+        str(run_id) if run_id else None,
+        str(batch_id) if batch_id else None,
+    )
+    return FolderSummary(
+        id=name,
+        name=name,
+        page_count=page_n,
+        ocr_processed=ocr_n,
+        imaging_processed=imaging_n,
+        ocr_status=status_ui,
+        last_updated_at=updated_at,
+        run_id=stored_run,
+        batch_id=stored_batch,
+    )
 
 
 def quick_disk_status(folder_dir: Path) -> str:
@@ -438,7 +447,12 @@ def build_folder_list(
     params: FolderListParams,
     metadata_dir: Path | None = None,
 ) -> FolderListResult:
-    """Compose landing list: DB summaries preferred; light disk or full local fallback."""
+    """Compose landing list: DB summaries preferred; light disk or full local fallback.
+    On Cosmos: the chart documents (CosmosFolderRepository.list_folders), with ground truth,
+    Reviewed marks, tags and manifest metadata from their containers -- a handful of
+    cross-partition queries, none over page documents."""
+    if backend.reads_cosmos():
+        return _cosmos_folder_list(params, metadata_dir)
     usable = bool(database_url and database_url_usable(database_url))
     metadata = chart_metadata_map(
         database_url if usable else None, db_schema=db_schema, metadata_dir=metadata_dir
@@ -484,6 +498,38 @@ def build_folder_list(
     if not rows and data_root is not None:
         rows = list_disk_folder_names_light(data_root)
     return filter_sort_page(with_metadata(rows), params)
+
+
+def _cosmos_folder_list(params: FolderListParams, metadata_dir: Path | None) -> FolderListResult:
+    store = backend.cosmos()
+    metadata = chart_metadata_map(None, metadata_dir=metadata_dir)
+    try:
+        rows = store.repo.list_folders()
+    except Exception as exc:
+        logger.warning("Cosmos chart list failed: %s", exc)
+        rows = []
+    have = charts_with_ground_truth(None)
+    try:
+        reviewed = reviewed_charts(None)
+    except Exception as exc:
+        logger.warning("chart_review lookup failed: %s", exc)
+        reviewed = {}
+    try:
+        tags = chart_tags_map(None)
+    except Exception as exc:
+        logger.warning("chart_tag lookup failed: %s", exc)
+        tags = {}
+    rows = [
+        row.model_copy(update={
+            "ground_truth_available": row.name in have,
+            "on_disk": False,
+            **_review_fields(reviewed.get(row.name)),
+            **({"tags": tags[row.name]} if row.name in tags else {}),
+            **metadata.get(row.name, {}),
+        })
+        for row in rows
+    ]
+    return filter_sort_page(rows, params)
 
 
 def _review_fields(review) -> dict:
