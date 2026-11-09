@@ -47,8 +47,9 @@ services:
       # Page Details shows only the Final values, headed Algorithm.
       CLIENT_VIEW: "true"
     volumes:
-      # Optional: MiniLM for the accuracy report's semantic page-type match.
-      - ${SEMANTIC_MODEL_HOST_PATH:-./data/empty}:/models/semantic-model:ro
+      # MiniLM for the accuracy report's semantic page-type match: the copy in this repo
+      # (models/semantic-model: tokenizer.json + onnx/model.onnx), unless SEMANTIC_MODEL_HOST_PATH says otherwise.
+      - ${SEMANTIC_MODEL_HOST_PATH:-./models/semantic-model}:/models/semantic-model:ro
     restart: unless-stopped
 
   frontend:
