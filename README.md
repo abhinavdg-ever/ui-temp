@@ -11,27 +11,60 @@ Extracted column: `CLIENT_VIEW=true`, set in `docker-compose.yml` and `.env.exam
 `backend/` and `frontend/` are copied from `review-ui/` in the main repository by
 `utilities/sync_client_ui.sh`. Make changes there, not here.
 
-## Run it
+## Deploy on the VM
+
+The client UI runs on the VM in Docker beside ours: API **5000**, web **5001**, project name
+`client-review` (its containers never replace our review-ui on 4000 / 4001). It reads its own
+database, `imaging_outputs_client`, on the Postgres container `postgres-db`
+(172.20.4.170:5432).
+
+**First time** (in this folder on the VM):
 
 ```bash
-cp .env.example .env          # set DATABASE_URL, ALLOWED_ORIGINS, AUTH_SECRET, Azure Blob
+cp .env.example .env
+# fill in section 1 DATABASE_URL=postgresql+psycopg://aiuser:<password>@172.20.4.170:5432/imaging_outputs_client
+#         section 2 Azure Blob (as our review-ui/.env), section 4 AUTH_SECRET
 mkdir -p data/empty
-docker compose up -d --build  # project "client-review": never touches our review-ui
+docker compose up -d --build
 curl -fsS localhost:5000/health && echo OK
 ```
 
-Open `http://<VM IP>:5001` and sign in with the usual username and password.
+**Each release**:
 
-| Command | Does |
+1. Windows (Command Prompt): github.com/abhinavdg-ever/ui-temp → Code → Download ZIP, and
+   copy it into this folder's Azure DevOps working copy (keep its `.env` and `data\`):
+
+   ```bat
+   cd /d %USERPROFILE%\Downloads
+   rmdir /s /q ui-temp-main 2>nul
+   tar -xf ui-temp-main.zip
+   robocopy "%USERPROFILE%\Downloads\ui-temp-main" "C:\work\client-ui-devops" /MIR /NFL /NDL /NP /XF .env .env.bak-* ._* /XD .git node_modules .venv "%USERPROFILE%\Downloads\ui-temp-main\data" "C:\work\client-ui-devops\data"
+   ```
+
+   then push `C:\work\client-ui-devops` to Azure DevOps as usual.
+
+2. VM (bash), in this folder:
+
+   ```bash
+   git pull
+   python3 ~/advantmed-imaging-pipeline/utilities/env_sync.py .     # .env in the example's order, values kept
+   docker cp ~/advantmed-imaging-pipeline/schema postgres-db:/tmp/schema
+   docker exec postgres-db psql -U postgres -d imaging_outputs_client -v ON_ERROR_STOP=1 -f /tmp/schema/migrate.sql
+   docker compose up -d --build
+   curl -fsS localhost:5000/health && echo OK
+   ```
+
+Open `http://172.20.4.170:5001` and sign in with the usual username and password.
+
+| Command (VM, this folder) | Does |
 |---|---|
-| `git pull && docker compose up -d --build` | update the screens |
 | `docker compose logs -f backend` | API logs |
 | `docker compose down` | stop it (ours keeps running) |
 
 ## Run it locally (no Docker)
 
 Ports **8003** (API) and **5175** (web), so it runs beside our review-ui (8002 / 5174).
-`.env.development` sets them for the dev server; the API port is given to uvicorn.
+`.env` sets them for the dev server (`DEV_FRONTEND_PORT`, `DEV_BACKEND_PORT`); the API port is given to uvicorn.
 
 ```bash
 cp .env.example .env                        # DATABASE_URL = the client database
@@ -45,51 +78,31 @@ cd frontend && npm install && npm run dev   # second terminal: http://localhost:
 ## Run it on Windows
 
 Install once: **Python 3.12** (`winget install Python.Python.3.12`; not 3.13, a
-dependency fails there), **Node 20+** (`winget install OpenJS.NodeJS.LTS`) and **Git**.
-Ports are the same: API 8003, web 5175.
+dependency fails there) and **Node 20+** (`winget install OpenJS.NodeJS.LTS`).
+Ports are the same: API 8003, web 5175 (`DEV_*_PORT` in `.env`).
 
-**PowerShell**, two windows, both started in this folder:
+**Command Prompt**, two windows, both started in this folder:
 
-```powershell
-# Window 1: the API
-Copy-Item .env.example .env          # then set DATABASE_URL in .env (Notepad)
+```bat
+:: Window 1: the API
+copy .env.example .env
+:: then set DATABASE_URL in .env (notepad .env)
 cd backend
-py -3.12 -m venv .venv               # -3.12: plain `py` picks your newest Python
-.venv\Scripts\Activate.ps1
+py -3.12 -m venv .venv
+.venv\Scripts\activate.bat
 pip install -r requirements.txt
 uvicorn app.main:app --host 127.0.0.1 --port 8003 --reload
 
-# Window 2: the web page
+:: Window 2: the web page
 cd frontend
 npm install
-npm run dev                          # open http://localhost:5175
+npm run dev
+:: open http://localhost:5175
 ```
 
-If `Activate.ps1` is blocked, run this once:
-`Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`.
-
-**Git Bash** (VS Code's bash terminal), the same with Unix-style commands:
-
-```bash
-cp .env.example .env
-cd backend && py -3.12 -m venv .venv && source .venv/Scripts/activate   # Scripts, not bin
-pip install -r requirements.txt
-uvicorn app.main:app --host 127.0.0.1 --port 8003 --reload
-
-cd frontend && npm install && npm run dev                               # second terminal
-```
-
-Next time only the activate line, `uvicorn …`, and `npm run dev` are needed. Check the API
-at <http://localhost:8003/docs>; `curl.exe` (not `curl`) in PowerShell.
-
-**Docker Desktop on Windows** runs the same as on the VM: `docker compose up -d --build` in
-this folder, then <http://localhost:5001>.
 
 | Problem | Fix |
 |---|---|
 | `No matching distribution` on `pip install` | Python 3.13+: make the venv with `py -3.12` |
 | The page loads but every request fails | uvicorn is not on 8003, or `.env` has no usable `DATABASE_URL` |
-| Port 5175 or 8003 in use | `netstat -ano \| findstr :8003`, then end that process, or change `.env.development` |
-
-Creating the database and copying charts into it: `docs/CLIENT_INSTANCE.md` in the main
-repository.
+| Port 5175 or 8003 in use | `netstat -ano \| findstr :8003`, then end that process, or change `DEV_*_PORT` in `.env` |
