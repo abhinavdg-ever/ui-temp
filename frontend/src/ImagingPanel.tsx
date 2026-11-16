@@ -491,6 +491,12 @@ type CompareRow = {
   /** Shown in place of the ground truth (Page Type on a Blank / Junk or duplicate page:
    * Not Found). */
   truthShown?: string;
+  /** Display only: how a value in this row reads on screen (Extracted, Final and the
+   * ground truth). Scoring and saving use the value itself. */
+  shown?: (value: string) => string;
+  /** 2026-11-16 (user): an empty ground-truth cell reads Not Found; the pipeline's value is not
+   * offered (no Accept, not taken on Save). Page Type and Page Subtype. */
+  noOffer?: boolean;
 };
 
 const BLANK_JUNK_CHOICES = ["Yes (Blank)", "Yes (Junk)", "No"] as const;
@@ -1035,11 +1041,11 @@ function CompareSection({
               <th scope="row">{row.label}</th>
               {finalOnly ? null : (
                 <td>
-                  <ValueWithNote value={row.extracted} note={row.note} />
+                  <ValueWithNote value={row.shown ? row.shown(row.extracted) : row.extracted} note={row.note} />
                 </td>
               )}
               <td>
-                <ValueWithNote value={row.processed} note={row.note} />
+                <ValueWithNote value={row.shown ? row.shown(row.processed) : row.processed} note={row.note} />
               </td>
               {compact ? null : <td><ConfidenceCell text={row.confidence} /></td>}
               {row.gtHidden || !truthColumn ? null : (
@@ -1127,12 +1133,12 @@ function GroundTruthCell({
   // "Carl Rogers (Yes)" / "Trelegy Ellipta (No)": the bracket says whether it is the member.
   const memberSide = /\((yes|no)\)$/i.exec(row.processed.trim())?.[1];
   const processedSide = memberSide ? yesNo(memberSide) : yesNo(row.processed);
-  const copied = !suggest
+  const copied = !suggest || row.noOffer
     ? ""
     : row.presence
       ? (processedSide ? processedSide === "yes" : valueFound(row.processed)) ? "Yes" : "No"
       : confirmedValue(row.processed);
-  const offer = suggest && !stored && !verdict;
+  const offer = suggest && !stored && !verdict && !row.noOffer;
   // 2026-11-04 / 11-05 (user): a field with no ground truth and no change takes its Final
   // value when the reviewer saves another field, instead of an empty (Not Found) entry --
   // also on a page that already has ground truth for other fields.
@@ -1140,7 +1146,7 @@ function GroundTruthCell({
     const fallback = row.presence
       ? (processedSide ? processedSide === "yes" : valueFound(row.processed)) ? "Yes" : "No"
       : confirmedValue(row.processed);
-    if (!stored && !verdict && fallback) offered.current[row.id] = fallback;
+    if (!stored && !verdict && fallback && !row.noOffer) offered.current[row.id] = fallback;
     else delete offered.current[row.id];
   }
   const fromStore = !verdict && Boolean(stored);
@@ -1181,7 +1187,7 @@ function GroundTruthCell({
     return (
       <span className="imaging-gt-slot">
         <span className={stored ? "imaging-gt-text" : "imaging-gt-copied"} title={stored || undefined}>
-          {row.truthShown ?? (stored || emptyLabel(row.id))}
+          {row.truthShown ?? shownAs(row, stored || emptyLabel(row.id))}
         </span>
         {(stored || blankCross || memberBlank) && !row.noMark ? mark : null}
       </span>
@@ -1223,7 +1229,7 @@ function GroundTruthCell({
     </button>
   );
   if (!editing) {
-    const raw = row.truthShown ?? (stored || (offer ? copied : "") || emptyLabel(row.id));
+    const raw = row.truthShown ?? shownAs(row, stored || (offer ? copied : "") || emptyLabel(row.id));
     // Provider Name / Credentials: several values show 1. / 2. / 3., also right after an edit.
     const shown = MULTI_ENTRY_FIELDS.has(row.id) ? numberedList(signerList(raw) || raw) : raw;
     const dim = !stored && !row.key;
@@ -1838,6 +1844,16 @@ function ValueWithNote({ value, note }: { value: string; note?: string }) {
   );
 }
 
+function shownAs(row: CompareRow, value: string): string {
+  return row.shown ? row.shown(value) : value;
+}
+
+/** 2026-11-16 (user): a Duplicate No reads Not Found on screen, on both sides; it is still
+ * stored and scored as No. */
+function duplicateShown(value: string): string {
+  return duplicateSide(value) === "no" ? NOT_FOUND : value;
+}
+
 function sameValue(
   value: string,
   confidence: string,
@@ -1854,6 +1870,7 @@ function sameValue(
     key: extra.key,
     note: extra.note,
     compare: extra.compare,
+    shown: extra.shown,
     id: extra.id,
     label: extra.label,
     extracted: value,
@@ -2034,7 +2051,7 @@ function PageDetails({
   const pageParts = splitPageType(page.pageType);
   const typeOut = pageTypeOut(page);
   // 2026-11-16 (user): only a duplicate (Yes, not Partial) shows its Page Type and Subtype as
-  // Not Found; a Blank / Junk page keeps its type (Letter/Fax, Others ...) on both sides.
+  // Not Found on the pipeline side; a Blank / Junk page shows its type (Letter/Fax, Others ...).
   const pipelineDup = page.isDuplicate === true && pageTypeKnown;
   // Final: the document's first-page type; a page outside any document keeps its own.
   const finalParts = splitPageType(page.finalPageType || page.pageType);
@@ -2372,6 +2389,7 @@ function PageDetails({
             id: "duplicate",
             label: "Is Duplicate",
             choices: DUPLICATE_CHOICES,
+            shown: duplicateShown,
             // 2026-11-16 (user): only Yes is a duplicate, as in the accuracy report; Partial
             // counts as No on both sides.
             compare: (truth: string) => {
@@ -2393,7 +2411,9 @@ function PageDetails({
             // A page Blank / Junk or Duplicate (Yes) on both sides is a Match whatever its type;
             // on one side only, a No Match (pageTypeOut).
             // Not Found only while empty: the reviewer can still type a type over it.
-            truthShown: gtDup && !(values.page_type ?? "").trim() ? NOT_FOUND : undefined,
+            // 2026-11-16 (user): no ground-truth type saved reads Not Found, Blank / Junk or not.
+            truthShown: !(values.page_type ?? "").trim() ? NOT_FOUND : undefined,
+            noOffer: true,
             blankIsNone: gtDup && pageTypeKnown,
             // Our L1 (an older client label still scores, gtPageTypeCanon.json), with
             // the accuracy report's rules: the better of Final and Extracted. Page
@@ -2419,7 +2439,8 @@ function PageDetails({
               noMark: true,
             }),
             processed: pipelineDup ? NOT_FOUND : fmtPageType(finalParts.subtype, pageTypeKnown),
-            truthShown: gtDup && !(values.page_subtype ?? "").trim() ? NOT_FOUND : undefined,
+            truthShown: !(values.page_subtype ?? "").trim() ? NOT_FOUND : undefined,
+            noOffer: true,
             l2Of: "page_type",
           },
           {
@@ -3183,6 +3204,8 @@ function DocSummary({
             const bits = pageBits(p, sections);
             const pageParts = splitPageType(p.pageType);
             const typeKnown = Boolean(sections.junk || sections.codeable);
+            // A duplicate: Page Type / Subtype read Not Found (display only).
+            const typeOutShown = typeKnown && p.isDuplicate === true;
             return (
             <tr key={`${p.pageNumber}-${p.fileName}`} id={pageRowId(p.fileName)}>
               <td>{p.pageNumber}</td>
@@ -3228,12 +3251,12 @@ function DocSummary({
               </td>
               <td>
                 <DuplicateLink
-                  label={fmtDuplicate(p.isDuplicate, p.pageTypeConfidence, sections.junk, p.duplicateOf, p.isPartialDuplicate, p.isDuplicateContent)}
+                  label={duplicateShown(fmtDuplicate(p.isDuplicate, p.pageTypeConfidence, sections.junk, p.duplicateOf, p.isPartialDuplicate, p.isDuplicateContent))}
                 />
               </td>
               <td>
                 <GtCell
-                  text={fmtPageType(pageParts.family, typeKnown)}
+                  text={typeOutShown ? NOT_FOUND : fmtPageType(pageParts.family, typeKnown)}
                   bits={bits.pageType}
                 />
                 <ConfLine
@@ -3247,7 +3270,7 @@ function DocSummary({
               </td>
               <td>
                 <GtCell
-                  text={fmtPageType(pageParts.subtype, typeKnown)}
+                  text={typeOutShown ? NOT_FOUND : fmtPageType(pageParts.subtype, typeKnown)}
                   bits={bits.pageType}
                 />
               </td>
