@@ -18,7 +18,8 @@ import {
   type StagedEncounter,
   savePageSequences,
 } from "./api";
-import { asManifestMember, credentialsVerdict, memberPipeline, memberTruth, noValue, pageTypeOut } from "./accuracy";
+import { asManifestMember, credentialsVerdict, memberPipeline, memberTruth, noValue, pageTypeOut, scoreChart, accuracyPercent, LIVE_METRICS } from "./accuracy";
+import { chartConfidence, levelLabel, pageConfidence } from "./confidenceLevel";
 import {
   duplicateDisplayConfidence,
   formatDuplicateLabel,
@@ -938,6 +939,10 @@ function enteredMark(
   return groundTruthMark(extracted, truth, presence) === "match" ? "match" : "mismatch";
 }
 
+/** Rows still marked on a page both sides call Blank / Junk (2026-11-19, user): the verdict
+ * itself and Codability (a Blank / Junk page is Non-Codable). */
+const MARKED_ON_BLANK_JUNK = new Set(["blank_junk", "codeable"]);
+
 function CompareSection({
   title,
   rows,
@@ -956,9 +961,12 @@ function CompareSection({
   readOnly = false,
   offered,
   problems,
+  marksOff = false,
 }: {
   title: string;
   rows: CompareRow[];
+  /** The page is Blank / Junk on both sides: no marks but on the Blank / Junk row. */
+  marksOff?: boolean;
   editingId: string | null;
   values: Record<string, string>;
   onCommit: (id: string, value: string) => void;
@@ -1033,7 +1041,7 @@ function CompareSection({
           )}
         </thead>
         <tbody>
-          {rows.map((row) => (
+          {rows.map((each) => (marksOff && !MARKED_ON_BLANK_JUNK.has(each.id) ? { ...each, noMark: true } : each)).map((row) => (
             <tr key={row.id}>
               <th scope="row">{row.label}</th>
               {finalOnly ? null : (
@@ -2057,7 +2065,13 @@ function PageDetails({
     (page.isCodeable != null && String(page.isCodeable).trim() !== "");
   const qualityKnown = sections.quality ?? sections.hw;
   const stagedMemberIds = stagedField(extraction, "member_id")?.value;
-  const memberIdShown = stagedMemberIds ? memberIdList(stagedMemberIds, manifest?.memberId, page.memberId) : page.memberId;
+  // No staged list: the member stage's own ID, still marked against the manifest's
+  // (2026-11-19, user: a matching Member ID showed no "(Yes)").
+  const memberIdShown = stagedMemberIds
+    ? memberIdList(stagedMemberIds, manifest?.memberId, page.memberId)
+    : text(page.memberId) && idKey(manifest?.memberId ?? "")
+      ? `${text(page.memberId)} (${sameIdKey(idKey(text(page.memberId) ?? ""), idKey(manifest?.memberId ?? "")) ? "Yes" : "No"})`
+      : page.memberId;
   // Member and provider rows show the stages' own results (member_extraction_results /
   // the member CSV; imaging_final / provider_signature.csv), never the key/value
   // extractor's raw pick in staging — that stays in the extraction pane.
@@ -2211,7 +2225,14 @@ function PageDetails({
   }
   // The Page Type the reviewer sees: the ground truth, else the Final value offered.
   const shownPageType = () => (values.page_type ?? "").trim() || (offered.current.page_type ?? "");
+  // 2026-11-19 (user): a page both the ground truth and the pipeline call Blank / Junk is not
+  // compared: no tick or cross on any row but Is Blank or Junk and Codability.
+  const bothBlankJunk =
+    page.isDuplicate !== true &&
+    (page.blankOrJunk ?? "").trim().toLowerCase().startsWith("yes") &&
+    (page.groundTruth ? (blankJunkTruth(page.groundTruth) ?? "").toLowerCase().startsWith("yes") : false);
   const sectionProps = {
+    marksOff: bothBlankJunk,
     compact,
     withTruth,
     offered,
@@ -2697,14 +2718,23 @@ export function algorithmQuality(score: number | null | undefined): string | nul
 
 type QualityRow = { page: ImagingPageResult; quality: string | null; reasons: string[] };
 
-/** Pages the page-tag model calls not visible, or the algorithm grades Low. */
+/** A Low page is listed when its final OCR match rate is under this (2026-11-19, user). */
+export const REJECT_MATCH_BELOW = 0.2;
+
+/** Pages the page-tag model calls not visible, or Low quality with an OCR match rate under
+ * 20% (2026-11-19, user: the three engines' rate when Doc Intel read the page, else Docling vs
+ * Tesseract). A page routed before the match rate was stored: the algorithm's Low, as before. */
 export function imageQualityRows(pages: ImagingPageResult[]): QualityRow[] {
   const out: QualityRow[] = [];
   for (const page of pages) {
     const quality = algorithmQuality(page.pageQualityConfidence);
     const reasons: string[] = [];
     if (page.isVisible === false) reasons.push("Not visible");
-    if (quality === "Low") reasons.push("Low quality");
+    const rate = page.ocrMatchRate;
+    const finalLow = (page.pageQualityTag ?? "").trim().toLowerCase() === "low";
+    if (rate != null) {
+      if (finalLow && rate < REJECT_MATCH_BELOW) reasons.push(`Low quality, match rate ${Math.round(rate * 100)}%`);
+    } else if (quality === "Low") reasons.push("Low quality");
     if (reasons.length) out.push({ page, quality, reasons });
   }
   return out;
@@ -2718,8 +2748,9 @@ function ImageQualityTable({ rows, processed }: { rows: QualityRow[]; processed:
   return (
     <div className="member-rejection">
       <p className="rejection-note">
-        Pages the page-tag model calls not visible, or the algorithm grades Low (score under 40%, before the
-        handwritten / OCR downgrades): <strong>{rows.length}</strong> ({pageList(rows.map((r) => r.page.pageNumber))}).
+        Pages the page-tag model calls not visible, or Low quality with an OCR match rate under 20% (three
+        engines when Doc Intel read the page, else Docling vs Tesseract):{" "}
+        <strong>{rows.length}</strong> ({pageList(rows.map((r) => r.page.pageNumber))}).
       </p>
       <table className="imaging-summary-table imaging-rejection-table">
         <thead>
@@ -2728,6 +2759,7 @@ function ImageQualityTable({ rows, processed }: { rows: QualityRow[]; processed:
             <th scope="col">Printed / HW</th>
             <th scope="col">Quality</th>
             <th scope="col">Visible</th>
+            <th scope="col">Match rate</th>
             <th scope="col">Why</th>
           </tr>
         </thead>
@@ -2736,8 +2768,14 @@ function ImageQualityTable({ rows, processed }: { rows: QualityRow[]; processed:
             <tr key={`${page.pageNumber}-${page.fileName}`}>
               <td>{page.pageNumber}</td>
               <td>{page.handwrittenOrPrinted || page.documentType || NOT_FOUND}</td>
-              <td>{quality ? `${quality} (${fmtMeasurement(page.pageQualityConfidence)})` : NOT_FOUND}</td>
+              {/* The Final Quality (after routing), the algorithm's score beside it. */}
+              <td>{(() => {
+                const tag = (page.pageQualityTag ?? "").trim();
+                const shown = tag ? tag.charAt(0).toUpperCase() + tag.slice(1).toLowerCase() : quality;
+                return shown ? `${shown} (${fmtMeasurement(page.pageQualityConfidence)})` : NOT_FOUND;
+              })()}</td>
               <td>{page.isVisible == null ? NOT_FOUND : page.isVisible ? "Yes" : "No"}</td>
+              <td>{page.ocrMatchRate == null ? NOT_FOUND : `${Math.round(page.ocrMatchRate * 100)}%`}</td>
               <td>{reasons.join(", ")}</td>
             </tr>
           ))}
@@ -3301,6 +3339,72 @@ function DocSummary({
   );
 }
 
+/** Page Confidence (2026-11-19, user): the page's level from its fields' High / Medium / Low
+ * (confidenceLevel.ts), at the top of Page Details. High pages can skip review. */
+function PageConfidenceStrip({ page }: { page: ImagingPageResult }) {
+  const pc = pageConfidence(page);
+  if (!pc.level) return null;
+  const detail = pc.fields.map((f) => `${f.label}: ${Math.round(f.value * 100)}% (${levelLabel(f.level)})`).join("\n");
+  return (
+    <div className={`confidence-strip level-${pc.level}`} title={detail}>
+      <strong>Page Confidence: {levelLabel(pc.level)}</strong>
+      {pc.value != null ? <span> ({Math.round(pc.value * 100)}%)</span> : null}
+      <span className="confidence-counts">
+        High {pc.counts.high} · Medium {pc.counts.medium} · Low {pc.counts.low} fields
+      </span>
+      {pc.level === "high" ? <span className="confidence-hint">can skip review</span> : null}
+      {pc.level === "low" ? (
+        <span className="confidence-hint">
+          check: {pc.fields.filter((f) => f.level === "low").map((f) => f.label).join(", ")}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+/** The chart at a glance (2026-11-19, user), collapsible, above every tab: the chart's
+ * confidence (its pages High / Medium / Low) and, when it has ground truth, its accuracy per
+ * metric as the Accuracy View scores it. */
+function ChartPanel({ document }: { document: ImagingDocumentResponse }) {
+  const cc = chartConfidence(document.pages);
+  const scored = scoreChart(document.folder_id, document.folder_id, document);
+  const rows = LIVE_METRICS.map((metric) => ({ metric, pct: accuracyPercent(scored.metrics[metric.id]) }))
+    .filter((r) => r.pct != null);
+  const overall = accuracyPercent(scored.overall);
+  const list = (pages: number[]) => (pages.length > 12 ? `${pages.slice(0, 12).join(", ")} …` : pages.join(", "));
+  return (
+    <details className={`chart-panel level-${cc.level ?? "none"}`}>
+      <summary>
+        <strong>Chart Confidence: {levelLabel(cc.level)}</strong>
+        {cc.value != null ? ` (${Math.round(cc.value * 100)}%)` : ""}
+        {" · "}pages High {cc.counts.high} · Medium {cc.counts.medium} · Low {cc.counts.low}
+        {overall != null ? ` · Accuracy ${Math.round(overall)}%` : ""}
+      </summary>
+      <div className="chart-panel-body">
+        <div>
+          <h4>Confidence</h4>
+          <p>High: every scored field ≥ 80%. Low: a key field (Member Name, DOB, DOS, Page Type, Blank / Junk) under 50%, or two fields under 50%. Chart Low when 10% or more of its pages are Low.</p>
+          {cc.pages.low.length ? <p><strong>Low pages:</strong> {list(cc.pages.low)}</p> : null}
+          {cc.pages.medium.length ? <p><strong>Medium pages:</strong> {list(cc.pages.medium)}</p> : null}
+        </div>
+        <div>
+          <h4>Accuracy (this chart)</h4>
+          {rows.length ? (
+            <table className="imaging-summary-table chart-panel-table">
+              <tbody>
+                {rows.map(({ metric, pct }) => (
+                  <tr key={metric.id}><td>{metric.label}</td><td>{Math.round(pct ?? 0)}%</td></tr>
+                ))}
+                {overall != null ? <tr><td><strong>Overall</strong></td><td><strong>{Math.round(overall)}%</strong></td></tr> : null}
+              </tbody>
+            </table>
+          ) : <p>No ground truth saved for this chart yet.</p>}
+        </div>
+      </div>
+    </details>
+  );
+}
+
 export default function ImagingPanel({
   tab,
   loading,
@@ -3393,6 +3497,7 @@ export default function ImagingPanel({
       <div className="imaging-panel-stack">
         <GroundTruthBanner folderId={document.folder_id} tab="sequencing" />
         <ManifestDetails manifest={manifest} />
+        <ChartPanel document={document} />
         <SequencingTable
           folderId={document.folder_id}
           pages={seqRows}
@@ -3412,6 +3517,7 @@ export default function ImagingPanel({
       <div className="imaging-panel-stack">
         <GroundTruthBanner folderId={document.folder_id} tab="encounter" />
         <ManifestDetails manifest={manifest} />
+        <ChartPanel document={document} />
         <EncounterIdentification
           key={document.folder_id}
           folderId={document.folder_id}
@@ -3428,6 +3534,7 @@ export default function ImagingPanel({
       <div className="imaging-panel-stack">
         <GroundTruthBanner folderId={document.folder_id} tab="member" />
         <ManifestDetails manifest={manifest} />
+        <ChartPanel document={document} />
         <RejectionRules
           member={
             <>
@@ -3452,6 +3559,7 @@ export default function ImagingPanel({
     return (
       <div className="imaging-panel-stack">
         <ManifestDetails manifest={manifest} />
+        <ChartPanel document={document} />
         <DocSummary pages={document.pages} sections={sections} />
       </div>
     );
@@ -3462,6 +3570,7 @@ export default function ImagingPanel({
       <div className="imaging-panel-stack">
         <GroundTruthBanner folderId={document.folder_id} tab="page" />
         <ManifestDetails manifest={manifest} />
+        <ChartPanel document={document} />
         <div className="ocr-empty">
           {currentFileName
             ? `No imaging row for ${currentFileName}.`
@@ -3477,6 +3586,8 @@ export default function ImagingPanel({
           drawer (compact) shows the manifest too. */}
       <GroundTruthBanner folderId={document.folder_id} tab="page" update={pageUpdate(currentPage.groundTruth)} />
       <ManifestDetails manifest={manifest} />
+        <ChartPanel document={document} />
+      <PageConfidenceStrip page={currentPage} />
       <PageDetails
         folderId={document.folder_id}
         page={currentPage}

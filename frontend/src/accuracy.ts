@@ -1,3 +1,4 @@
+import { CONFIDENCE_FIELDS, chartConfidence, levelLabel, pageConfidence, type ChartConfidence, type PageConfidence } from "./confidenceLevel";
 import type { ImagingManifestDetails,
   ImagingDocumentResponse,
   ImagingPageResult,
@@ -168,6 +169,8 @@ export type ChartAccuracy = {
   pages: PageAccuracy[];
   /** Additional Metrics: Visibility and Invoice (not in the seven streams). */
   extra: ExtraCounts;
+  /** The chart's confidence level (2026-11-19, user; confidenceLevel.ts): shades its row. */
+  confidence?: ChartConfidence;
 };
 
 /** Additional Metrics (2026-11-12, user), shown behind the Accuracy View's link.
@@ -328,6 +331,8 @@ export type PageAccuracy = {
   /** The values each metric compared, ground truth and pipeline, for the download's "with
    * values" option (2026-11-16, user). */
   values?: Record<string, string>;
+  /** The page's confidence level and each metric's confidence (2026-11-19, user; download). */
+  confidence?: PageConfidence;
 };
 
 /** The value columns of the page-level download, in order: [name, ground truth, pipeline
@@ -1065,6 +1070,7 @@ export function scoreChart(
       overall: pageOverall ? (pageOverall.verdict === "yes" ? "yes" : "no") : null,
       matches: pageOverall ? pageOverall.matches : null,
       values: pageValues(raw, doc.manifest),
+      confidence: pageConfidence(raw),
     });
     if (pageOverall) {
       add(overall, pageOverall.verdict);
@@ -1105,6 +1111,7 @@ export function scoreChart(
     dosRates,
     pages,
     extra,
+    confidence: chartConfidence(doc.pages ?? []),
   };
 }
 
@@ -1124,7 +1131,10 @@ export function pageAccuracyCsv(charts: ChartAccuracy[], withValues = false): st
   // truth (GT_) and pipeline (Algo_) values.
   const values = withValues ? valueHeaders() : [];
   const header = ["Chart Name", "Run", "Batch", "Page Number", "File Name",
-    ...live.map((metric) => metric.label), "Overall", "Streams Matched", ...values];
+    ...live.map((metric) => metric.label), "Overall", "Streams Matched",
+    // Confidence (2026-11-19, user): the chart's and the page's level, then each metric's.
+    "Chart Confidence", "Page Confidence", "Page Confidence %",
+    ...CONFIDENCE_FIELDS.map(([, label]) => `Conf ${label}`), ...values];
   const lines = [header.map(csvCell).join(",")];
   for (const chart of charts) {
     for (const page of [...chart.pages].sort((a, b) => a.pageNumber - b.pageNumber)) {
@@ -1141,6 +1151,13 @@ export function pageAccuracyCsv(charts: ChartAccuracy[], withValues = false): st
         page.overall ? VERDICT_TEXT[page.overall] : "Not Scored",
         // "6 of 7", not "6/7": Excel reads that as a date (2026-11-09, user).
         page.matches == null ? "" : `${page.matches} of ${OVERALL_STREAMS}`,
+        chart.confidence ? levelLabel(chart.confidence.level) : "",
+        page.confidence ? levelLabel(page.confidence.level) : "",
+        page.confidence?.value == null ? "" : `${Math.round(page.confidence.value * 100)}%`,
+        ...CONFIDENCE_FIELDS.map(([key]) => {
+          const field = page.confidence?.fields.find((f) => f.key === key);
+          return field ? `${Math.round(field.value * 100)}%` : "";
+        }),
         ...values.map((column) => page.values?.[column] ?? ""),
       ].map(csvCell).join(","));
     }
